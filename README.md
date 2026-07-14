@@ -5,11 +5,11 @@ and safety (HarmBench + hijack preambles), and comparing a cheap attention proxy
 against the rollout ground truth.
 
 The three commitment layers (see `harness.py` docstring, rule R1):
-- **Layer 1** — truncate the trace at prefixes, free-sample `k` rollouts from
+- **Layer 1** - truncate the trace at prefixes, free-sample `k` rollouts from
   each, score with the matcher. `P(final conclusion | prefix)` = the commitment
   curve. This is *the* definition.
-- **Layer 2** — attention-to-anchor, a cheap proxy calibrated against Layer 1.
-- **Margin/entropy** — secondary proxy, never the definition.
+- **Layer 2** - attention-to-anchor, a cheap proxy calibrated against Layer 1.
+- **Margin/entropy** - secondary proxy, never the definition.
 
 ## Layout
 
@@ -81,12 +81,12 @@ Notes:
 - **Activating vs. calling by path.** `.\.venv\Scripts\Activate.ps1` in
   **PowerShell**; `source .venv/Scripts/activate` in **Git Bash** (forward
   slashes, no `.ps1`). Or skip activation and call `.\.venv\Scripts\python.exe`
-  directly — works from any shell. Backslashes + `.ps1` = PowerShell; forward
+  directly, works from any shell. Backslashes + `.ps1` = PowerShell; forward
   slashes + `source` = Git Bash.
 - **`transformers` is pinned `<5`.** 5.x changed `apply_chat_template` to return
   a dict instead of a tensor, which breaks the frozen harness. Do not un-pin.
 - **Fresh GPU machine:** make a new venv there and install the CUDA torch build
-  for *that* box. Do not copy `.venv/` between machines — venvs aren't portable.
+  for *that* box. Do not copy `.venv/` between machines, venvs aren't portable.
 
 ## Workflow
 
@@ -99,7 +99,7 @@ $env:PYTORCH_CUDA_ALLOC_CONF = "expandable_segments:True"
 ```
 
 **1. Validate on math (smoke test).** Debug curves *here*, where the matcher is
-unambiguous — a failure means prefix granularity or `k` (rollouts), not the
+unambiguous, a failure means prefix granularity or `k` (rollouts), not the
 harness.
 
 ```
@@ -108,11 +108,11 @@ python scripts/smoke_test.py --model deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B \
 ```
 
 Expected: `[smoke] PASS` with `nonflat_frac` high and `mean_monotonicity >= 0.6`.
-Individual curves are noisy at temp 0.6 (e.g. `[0.0,0.25,0.0,0.25,...,1.0]`) —
+Individual curves are noisy at temp 0.6 (e.g. `[0.0,0.25,0.0,0.25,...,1.0]`) 
 that wobble-then-commit *is* the signal. Model choice matters: it **must be a
 reasoning model that emits `<think>...</think>`** (DeepSeek-R1-Distill, Qwen3,
 QwQ). A plain instruct model emits no `</think>`, so every trace shows up as
-`(no curve: parent uncommitted)` — looks broken, isn't.
+`(no curve: parent uncommitted)`, looks broken, it isn't.
 
 **2. Production math traces** (two budgets so flip stats compute; `sdpa` by
 default, no OOM):
@@ -123,7 +123,7 @@ python scripts/run_traces.py --domain math --model deepseek-ai/DeepSeek-R1-Disti
 ```
 
 **3. Layer 2 calibration** (selection split only; short budget + small batch to
-keep eager attention in memory — see Memory notes):
+keep eager attention in memory, see Memory notes):
 
 ```
 python scripts/run_traces.py --domain math --model deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B \
@@ -171,13 +171,13 @@ Rollouts dominate; scale them down first if a run is too slow/large.
 
 To estimate a run's wall time, read a completed trace's self-timed field:
 `(Get-Content outputs\traces\smoke.jsonl | ConvertFrom-Json).wall_clock_sec`, then
-multiply by the trace count (skip trace 1 — CUDA kernel warmup skews it).
+multiply by the trace count (skip trace 1, CUDA kernel warmup skews it).
 
 ### Memory & attention backend
 
 Runs default to **`sdpa`** (fused, memory-efficient attention). `--layer2` forces
 **`eager`**, which materializes the full `[batch, heads, seq, seq]` attention
-matrix — O(seq²) memory. On long batched rollouts that reaches many GiB and OOMs
+matrix, O(seq²) memory. On long batched rollouts that reaches many GiB and OOMs
 (a single softmax alloc can exceed 8 GiB). So: only use eager when Layer 2
 capture needs it, and keep Layer 2 runs to short budgets (≤4096) and small
 `--rollouts`. If you see a CUDA OOM ending in `eager_attention_forward`/`softmax`,
@@ -191,16 +191,16 @@ A teammate reproduces the commitment-layer results by following
 `[smoke] PASS`.
 
 - Reproduction is **qualitative, not bitwise**: GPU sampling is nondeterministic,
-  so curves won't match exactly — the gate (curves rise, not flat) is the bar.
+  so curves won't match exactly, the gate (curves rise, not flat) is the bar.
 - `transformers` **must be 4.x** (pinned in `requirements.txt`). For an exact
   environment, use the committed lockfile: `pip install -r requirements.lock.txt`
   (regenerate with `pip freeze > requirements.lock.txt`).
 - `harness.py` + the Trace schema are the **frozen contract** both sides build
-  against — do not edit without sign-off. Everything else iterates.
+  against, do not edit without sign-off. Everything else iterates.
 - The **safety side** additionally needs a local HarmBench file (`--harmbench`)
   and Gordon's classifier (`--classifier`); neither is required to replicate the
   commitment layers.
-- `.venv/` and `outputs/*.jsonl|*.npz` are gitignored — the teammate regenerates
+- `.venv/` and `outputs/*.jsonl|*.npz` are gitignored, the teammate regenerates
   traces, they don't pull yours.
 
 ## Tests without a GPU
@@ -216,9 +216,9 @@ pytest -q tests/                  # same, under pytest
 ## Code quality / CI
 
 Automated on every push to `main` and every PR via `.github/workflows/ci.yml`:
-- **lint** — `ruff check .` (config in `ruff.toml`; `harness.py` is excluded so the
+- **lint**, `ruff check .` (config in `ruff.toml`; `harness.py` is excluded so the
   frozen engine is never reformatted).
-- **test** — the torch-free suite above, on a plain runner (numpy + pytest only,
+- **test**, the torch-free suite above, on a plain runner (numpy + pytest only,
   no GPU or model download). Fast and free.
 
 Run the same checks locally:
@@ -238,7 +238,7 @@ pip install pre-commit && pre-commit install
 Branches → Add branch ruleset** (or "Add rule") for `main` → enable **Require a
 pull request before merging** and **Require status checks to pass** → select the
 `lint` and `test` checks (they appear after CI has run once). That blocks merging
-red — worth turning on before the handoff so your teammate can't merge a break.
+red, worth turning on before the handoff so your teammate can't merge a break.
 
 ## Troubleshooting
 
