@@ -63,6 +63,13 @@ def main():
     ap.add_argument("--split", default="all",
                     choices=["extraction", "selection", "heldout", "all"])
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--dtype", default="bfloat16",
+                    choices=["bfloat16", "float16", "float32"],
+                    help="use float16 on pre-Ampere GPUs (e.g. Colab T4)")
+    ap.add_argument("--attn", default=None, choices=["sdpa", "eager"],
+                    help="default sdpa (memory-efficient); auto-forced to eager "
+                         "when --layer2 is set, since Layer 2 attention capture "
+                         "requires eager")
     # rollout / curve config
     ap.add_argument("--prefixes", type=int, default=8)
     ap.add_argument("--rollouts", type=int, default=8)
@@ -91,9 +98,9 @@ def main():
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
+    from harness import compute_cell_stats, load_traces, save_trace_row
     from scripts.modelio import load_model
     from scripts.pipeline import collect_trace
-    from harness import save_trace_row, load_traces, compute_cell_stats
 
     prompts = load_prompts(args)
     matcher = build_matcher(args)
@@ -105,8 +112,14 @@ def main():
     act_dir = ROOT / "outputs" / "activations"
     act_dir.mkdir(parents=True, exist_ok=True)
 
-    model, tok, meta = load_model(args.model)
+    attn = args.attn or ("eager" if args.layer2 else "sdpa")
+    if args.layer2 and attn != "eager":
+        raise SystemExit("--layer2 requires eager attention; drop --attn sdpa")
+    model, tok, meta = load_model(args.model, dtype=args.dtype,
+                                  attn_implementation=attn)
 
+    import torch
+    _cuda = torch.cuda.is_available()
     n_rows = 0
     for p in prompts:
         for budget in args.budgets:
@@ -126,6 +139,8 @@ def main():
                 stage = "metric" if tr.rollout_outcomes else "surface"
                 save_trace_row(tr, str(out_path), stage=stage)
                 n_rows += 1
+                if _cuda:
+                    torch.cuda.empty_cache()
         print(f"[run] {p['prompt_id']} done ({n_rows} rows so far)")
 
     # Group 2: cell-level flip stats, stamped back onto the rows.

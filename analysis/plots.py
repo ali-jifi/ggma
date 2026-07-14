@@ -9,16 +9,16 @@ import argparse
 import sys
 from pathlib import Path
 
+import matplotlib
 import numpy as np
 
-import matplotlib
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt   # noqa: E402
+import matplotlib.pyplot as plt  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from analysis.curves import curve_report   # noqa: E402
+from analysis.curves import curve_report  # noqa: E402
 
 
 def load_rows(path):

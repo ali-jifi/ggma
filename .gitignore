@@ -1,5 +1,7 @@
 __pycache__/
 *.pyc
+.venv/
+venv/
 
 # generated collection + analysis artifacts (regenerable; not source)
 outputs/traces/*.jsonl

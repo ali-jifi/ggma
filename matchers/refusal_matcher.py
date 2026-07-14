@@ -33,10 +33,10 @@ def load_classifier(spec: str) -> Callable[[str], LabelOut]:
 
 
 def _normalize_label(label: str) -> Optional[str]:
-    l = label.strip().lower()
-    if "refus" in l:
+    low = label.strip().lower()
+    if "refus" in low:
         return "refuse"
-    if "compl" in l or l in ("harmful", "unsafe", "answer", "answered"):
+    if "compl" in low or low in ("harmful", "unsafe", "answer", "answered"):
         return "comply"
     return None
 

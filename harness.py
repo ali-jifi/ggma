@@ -1,6 +1,14 @@
 """
 harness.py (v2) -- shared toolkit for the Two Drifts project. One copy, both sides.
 
+FROZEN vs ITERABLE:
+  FROZEN (no edits without team sign-off): this file and the Trace schema. Both
+    sides build against it; a change on one side must land on both (R4).
+  ITERABLE (change freely): everything else -- matchers/, data/, scripts/,
+    analysis/. New behavior goes there, plugged in through the documented
+    interfaces (ConclusionMatcher, collect_trace, the outputs/ JSONL), never by
+    editing the engine below.
+
 Supersedes v1. Changes:
   - Trace schema upgraded to the full seven-group v2 spec (flat, single class).
   - Layer 1 commitment: truncation + free rollout (THE commitment definition).

@@ -21,9 +21,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from analysis.curves import curve_report, sanity_check   # noqa: E402
-from data.load_gsm8k import load_gsm8k                    # noqa: E402
-from matchers.gsm8k_matcher import GSM8KMatcher           # noqa: E402
+from analysis.curves import curve_report, sanity_check  # noqa: E402
+from data.load_gsm8k import load_gsm8k  # noqa: E402
+from matchers.gsm8k_matcher import GSM8KMatcher  # noqa: E402
 
 
 def main():
@@ -39,23 +39,33 @@ def main():
                     choices=["sentence", "even"])
     ap.add_argument("--rollout-max-new-tokens", type=int, default=2048)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--dtype", default="bfloat16",
+                    choices=["bfloat16", "float16", "float32"],
+                    help="use float16 on pre-Ampere GPUs (e.g. Colab T4)")
+    ap.add_argument("--attn", default="sdpa", choices=["sdpa", "eager"],
+                    help="sdpa is memory-efficient; the smoke test does no Layer 2 "
+                         "so eager (which materializes the full attention matrix "
+                         "and OOMs on long traces) is never needed here")
     ap.add_argument("--local-gsm8k", default=None,
                     help="local JSONL instead of HF datasets")
     ap.add_argument("--out", default=str(ROOT / "outputs" / "traces" / "smoke.jsonl"))
     ap.add_argument("--report", default=str(ROOT / "outputs" / "smoke_report.json"))
     args = ap.parse_args()
 
+    from harness import save_trace_row
     from scripts.modelio import load_model
     from scripts.pipeline import collect_trace
-    from harness import save_trace_row
 
     split_filter = None if args.split == "all" else args.split
     prompts = load_gsm8k(n=args.n, seed=args.seed, local_path=args.local_gsm8k,
                          split_filter=split_filter)
     print(f"[smoke] {len(prompts)} GSM8K prompts, split={args.split}")
 
-    model, tok, meta = load_model(args.model)
+    model, tok, meta = load_model(args.model, dtype=args.dtype,
+                                  attn_implementation=args.attn)
     matcher = GSM8KMatcher()
+    import torch
+    _cuda = torch.cuda.is_available()
 
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -74,6 +84,8 @@ def main():
         )
         stage = "metric" if tr.rollout_outcomes else "surface"
         save_trace_row(tr, str(out_path), stage=stage)
+        if _cuda:
+            torch.cuda.empty_cache()
         if tr.rollout_outcomes:
             rep = curve_report(tr.rollout_outcomes)
             reports.append(rep)

@@ -4,6 +4,13 @@ Measuring when a reasoning trace *commits* to its conclusion, on math (GSM8K)
 and safety (HarmBench + hijack preambles), and comparing a cheap attention proxy
 against the rollout ground truth.
 
+The three commitment layers (see `harness.py` docstring, rule R1):
+- **Layer 1** — truncate the trace at prefixes, free-sample `k` rollouts from
+  each, score with the matcher. `P(final conclusion | prefix)` = the commitment
+  curve. This is *the* definition.
+- **Layer 2** — attention-to-anchor, a cheap proxy calibrated against Layer 1.
+- **Margin/entropy** — secondary proxy, never the definition.
+
 ## Layout
 
 ```
@@ -20,14 +27,17 @@ data/
 scripts/
   modelio.py            model loading (only place transformers is imported)
   pipeline.py           collect_trace(): harness + matcher + Layer 1 (+ Layer 2) -> one Trace
-  smoke_test.py         driver: ~30-60 GSM8K prompts, curve-sanity gate
+  smoke_test.py         driver: GSM8K prompts, curve-sanity gate (validate here)
   run_traces.py         production sweep: prompts x budgets x resamples -> JSONL
+  calibrate_layer2.py   fit isotonic Layer 2 proxy -> Layer 1 probability
 analysis/
   curves.py             curve diagnostics (pure, torch-free, self-testing)
   plots.py              figures from outputs/ only (never re-runs a model)
 outputs/
   traces/*.jsonl        v2 Trace rows (the sole collection<->analysis interface)
   activations/*.npz     activation sidecars
+  calibrations/*.json   saved isotonic fits
+  figures/*.png         plots
 ```
 
 Architectural rules (enforced by the layout):
@@ -37,52 +47,209 @@ Architectural rules (enforced by the layout):
 - The freeze rule covers `harness.py` + the Trace schema. Everything else iterates.
 - Matcher swap is the *only* math->safety change (R4): same truncation, same
   sampling, same curve computation.
+- Calibration is fit on the **selection** split only, never heldout (R1/R2), and
+  re-fit under each steering condition.
 
-The three commitment layers (see `harness.py` docstring, R1): Layer 1 rollout
-outcomes are THE definition; Layer 2 attention-to-anchor and the margin are
-proxies calibrated against it.
+## Environment setup
+
+Requires an NVIDIA GPU for real runs (developed on an RTX 3090 Ti, 24 GB). CPU
+works only for the torch-free tests below.
+
+```bash
+git clone <repo> && cd ggma
+python -m venv .venv
+```
+
+**Install the CUDA build of PyTorch first**, matching your GPU. PyPI ships only
+the CPU build, so you must point pip at PyTorch's CUDA wheel index. Check your
+driver's CUDA version with `nvidia-smi` (top-right); a newer driver runs older
+CUDA wheels fine. `cu126` is known-good here:
+
+```powershell
+# PowerShell (Windows). Newer drivers are backward-compatible with cu126.
+.\.venv\Scripts\python.exe -m pip install "torch==2.13.0" --index-url https://download.pytorch.org/whl/cu126
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+Verify the GPU is visible (must print `True`):
+
+```powershell
+.\.venv\Scripts\python.exe -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+```
+
+Notes:
+- **Activating vs. calling by path.** `.\.venv\Scripts\Activate.ps1` in
+  **PowerShell**; `source .venv/Scripts/activate` in **Git Bash** (forward
+  slashes, no `.ps1`). Or skip activation and call `.\.venv\Scripts\python.exe`
+  directly — works from any shell. Backslashes + `.ps1` = PowerShell; forward
+  slashes + `source` = Git Bash.
+- **`transformers` is pinned `<5`.** 5.x changed `apply_chat_template` to return
+  a dict instead of a tensor, which breaks the frozen harness. Do not un-pin.
+- **Fresh GPU machine:** make a new venv there and install the CUDA torch build
+  for *that* box. Do not copy `.venv/` between machines — venvs aren't portable.
 
 ## Workflow
 
-1. **Math rollout core + validate on math.** Curves are debugged here, where the
-   matcher is unambiguous:
-   ```
-   python scripts/smoke_test.py --model <hf_id> --n 30
-   ```
-   Passes when curves are mostly non-flat and non-decreasing on average
-   (`analysis.curves.sanity_check`). A flat-noise population means prefix
-   granularity is too coarse or `--rollouts` (k) too small — fix here, not in the
-   harness.
+Commands below use `python`; substitute `.\.venv\Scripts\python.exe` (PowerShell)
+or `.venv/Scripts/python` (Git Bash) if the venv isn't activated. Set this once
+per shell to reduce CUDA memory fragmentation:
 
-2. **Production math traces:**
-   ```
-   python scripts/run_traces.py --domain math --model <hf_id> \
-       --budgets natural 512 4096 --samples 8 --n 50 --layer2
-   ```
+```powershell
+$env:PYTORCH_CUDA_ALLOC_CONF = "expandable_segments:True"
+```
 
-3. **Safety = matcher swap only:**
-   ```
-   python scripts/run_traces.py --domain safety --model <hf_id> \
-       --harmbench data/harmbench.csv --induction hijack_preamble \
-       --preamble-id <stem> --classifier gordon_refusal:classify \
-       --budgets natural 512 4096 --samples 8 --n 50 --layer2
-   ```
-   `--classifier module:callable` resolves Gordon's classifier; it plugs in behind
-   the same `match()` signature.
+**1. Validate on math (smoke test).** Debug curves *here*, where the matcher is
+unambiguous — a failure means prefix granularity or `k` (rollouts), not the
+harness.
 
-4. **Analysis:**
-   ```
-   python analysis/plots.py --traces outputs/traces/math.jsonl
-   ```
+```
+python scripts/smoke_test.py --model deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B \
+    --n 8 --rollouts 4 --rollout-max-new-tokens 1024
+```
 
-Layer 2 needs the model loaded with `attn_implementation="eager"` (the default in
-`scripts/modelio.py`); calibration (`harness.fit_isotonic`) is fit on the
-selection split against Layer 1 and must be re-fit under each steering condition
-(R2).
+Expected: `[smoke] PASS` with `nonflat_frac` high and `mean_monotonicity >= 0.6`.
+Individual curves are noisy at temp 0.6 (e.g. `[0.0,0.25,0.0,0.25,...,1.0]`) —
+that wobble-then-commit *is* the signal. Model choice matters: it **must be a
+reasoning model that emits `<think>...</think>`** (DeepSeek-R1-Distill, Qwen3,
+QwQ). A plain instruct model emits no `</think>`, so every trace shows up as
+`(no curve: parent uncommitted)` — looks broken, isn't.
+
+**2. Production math traces** (two budgets so flip stats compute; `sdpa` by
+default, no OOM):
+
+```
+python scripts/run_traces.py --domain math --model deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B \
+    --budgets 512 4096 --samples 4 --n 20 --rollouts 4 --rollout-max-new-tokens 1024
+```
+
+**3. Layer 2 calibration** (selection split only; short budget + small batch to
+keep eager attention in memory — see Memory notes):
+
+```
+python scripts/run_traces.py --domain math --model deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B \
+    --split selection --budgets 1024 --samples 2 --n 20 \
+    --rollouts 4 --rollout-max-new-tokens 512 --layer2
+python scripts/calibrate_layer2.py --traces outputs/traces/math.jsonl \
+    --split selection --domain math
+```
+
+**4. Safety = matcher swap only** (same machinery; needs a local HarmBench file
+and Gordon's classifier):
+
+```
+python scripts/run_traces.py --domain safety --model <hf_id> \
+    --harmbench data/harmbench.csv --induction hijack_preamble \
+    --preamble-id <stem> --classifier gordon_refusal:classify \
+    --budgets 512 4096 --samples 8 --n 50 --layer2
+```
+
+`--classifier module:callable` resolves Gordon's classifier behind the same
+`match()` signature.
+
+**5. Analysis** (reads `outputs/` only, never re-runs a model):
+
+```
+python analysis/plots.py --traces outputs/traces/math.jsonl
+```
+
+### Config knobs and cost
+
+Total generations ≈ `n_prompts × n_budgets × samples × (1 + prefixes × rollouts)`.
+Rollouts dominate; scale them down first if a run is too slow/large.
+
+| flag | meaning | notes |
+|------|---------|-------|
+| `--n` | prompts | linear cost |
+| `--budgets` | thinking budgets | need ≥2 (short/long) for flip stats; `natural` = uncapped |
+| `--samples` | resamples per cell | flip rates invalid at 1 (temp 0.6 is stochastic); 4 floor, 8 final |
+| `--rollouts` | k per prefix | the big multiplier |
+| `--prefixes` | truncation points | 8 default; sentence-boundary policy |
+| `--rollout-max-new-tokens` | rollout length cap | shorter = faster + less memory |
+| `--dtype` | bfloat16 (default) / float16 | use float16 on pre-Ampere GPUs (Colab T4) |
+| `--attn` | sdpa (default) / eager | eager only for `--layer2` (auto-forced) |
+| `--layer2` | capture + attn proxy | forces eager; keep budgets ≤4096, small batch |
+
+To estimate a run's wall time, read a completed trace's self-timed field:
+`(Get-Content outputs\traces\smoke.jsonl | ConvertFrom-Json).wall_clock_sec`, then
+multiply by the trace count (skip trace 1 — CUDA kernel warmup skews it).
+
+### Memory & attention backend
+
+Runs default to **`sdpa`** (fused, memory-efficient attention). `--layer2` forces
+**`eager`**, which materializes the full `[batch, heads, seq, seq]` attention
+matrix — O(seq²) memory. On long batched rollouts that reaches many GiB and OOMs
+(a single softmax alloc can exceed 8 GiB). So: only use eager when Layer 2
+capture needs it, and keep Layer 2 runs to short budgets (≤4096) and small
+`--rollouts`. If you see a CUDA OOM ending in `eager_attention_forward`/`softmax`,
+the fix is the attention backend, not the batch size. The drivers call
+`torch.cuda.empty_cache()` between traces to curb fragmentation.
+
+## Replication / handoff
+
+A teammate reproduces the commitment-layer results by following
+**Environment setup** then running the smoke test in step 1. Green light =
+`[smoke] PASS`.
+
+- Reproduction is **qualitative, not bitwise**: GPU sampling is nondeterministic,
+  so curves won't match exactly — the gate (curves rise, not flat) is the bar.
+- `transformers` **must be 4.x** (pinned in `requirements.txt`). For an exact
+  environment, use the committed lockfile: `pip install -r requirements.lock.txt`
+  (regenerate with `pip freeze > requirements.lock.txt`).
+- `harness.py` + the Trace schema are the **frozen contract** both sides build
+  against — do not edit without sign-off. Everything else iterates.
+- The **safety side** additionally needs a local HarmBench file (`--harmbench`)
+  and Gordon's classifier (`--classifier`); neither is required to replicate the
+  commitment layers.
+- `.venv/` and `outputs/*.jsonl|*.npz` are gitignored — the teammate regenerates
+  traces, they don't pull yours.
 
 ## Tests without a GPU
 
 `matchers/`, `data/`, and `analysis/curves.py` are torch-free and unit-testable:
+
 ```
-python analysis/curves.py     # curve-diagnostic self-test
+python analysis/curves.py         # curve-diagnostic self-test
+python tests/test_torchfree.py    # matchers, split logic, curves (no pytest needed)
+pytest -q tests/                  # same, under pytest
 ```
+
+## Code quality / CI
+
+Automated on every push to `main` and every PR via `.github/workflows/ci.yml`:
+- **lint** — `ruff check .` (config in `ruff.toml`; `harness.py` is excluded so the
+  frozen engine is never reformatted).
+- **test** — the torch-free suite above, on a plain runner (numpy + pytest only,
+  no GPU or model download). Fast and free.
+
+Run the same checks locally:
+```
+pip install -r requirements-dev.txt
+ruff check .        # add --fix to auto-fix
+pytest -q tests/
+```
+
+Optional local pre-commit hook (`.pre-commit-config.yaml`), runs ruff on
+`git commit`:
+```
+pip install pre-commit && pre-commit install
+```
+
+**Branch protection** (set once in the GitHub UI, free): repo **Settings →
+Branches → Add branch ruleset** (or "Add rule") for `main` → enable **Require a
+pull request before merging** and **Require status checks to pass** → select the
+`lint` and `test` checks (they appear after CI has run once). That blocks merging
+red — worth turning on before the handoff so your teammate can't merge a break.
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `KeyError: 'shape'` / `AttributeError` in `apply_chat_template` | `transformers` 5.x returns a dict, harness expects a tensor | `pip install "transformers>=4.45,<5"` |
+| `CUDA out of memory` ending in `eager_attention_forward`/`softmax` | eager attention's O(seq²) matrix | use `sdpa` (default); for `--layer2` shorten budget/rollouts |
+| `torch.cuda.is_available()` is `False` | CPU-only torch installed | reinstall from the CUDA wheel index (see setup) |
+| every trace `(no curve: parent uncommitted)` | model doesn't emit `</think>` | use a reasoning model (DeepSeek-R1-Distill etc.) |
+| watcher shows `0 / 30` traces | wrong working directory | `cd` into `ggma/`, or use absolute path to `outputs/` |
+| `..venvScriptsActivate.ps1: command not found` | PowerShell syntax in Git Bash | `source .venv/Scripts/activate` |
+| `torch_dtype is deprecated` / `attention mask is not set` | cosmetic warnings | ignore |
+| symlink / Developer Mode warning | HF cache uses copies on Windows | ignore, or enable Developer Mode / set `HF_HUB_DISABLE_SYMLINKS_WARNING=1` |
+| slow HF downloads / rate limit warning | unauthenticated HF requests | ignore, or set `HF_TOKEN` |
