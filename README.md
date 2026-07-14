@@ -51,7 +51,7 @@ proxies calibrated against it.
    ```
    Passes when curves are mostly non-flat and non-decreasing on average
    (`analysis.curves.sanity_check`). A flat-noise population means prefix
-   granularity is too coarse or `--rollouts` (k) too small — fix here, not in the
+   granularity is too coarse or `--rollouts` (k) too small, fix here, not in the
    harness.
 
 2. **Production math traces:**
