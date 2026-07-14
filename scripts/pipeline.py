@@ -1,0 +1,157 @@
+"""End-to-end per-prompt collection: harness generation -> matcher-scored
+Layer 1 commitment curve -> optional Layer 2 attention proxy -> one Trace row.
+
+Both scripts/smoke_test.py and scripts/run_traces.py call collect_trace so the
+two never diverge in how a row is built. Nothing here re-implements harness
+mechanics; it only wires them together (the harness stays frozen).
+"""
+
+import time
+import uuid
+
+import harness as H
+from matchers.base import scorer_version, to_match_fn
+
+
+def _generate(model, tok, prompt_text, budget_condition, decode_temp, decode_top_p,
+              seed, max_new_tokens):
+    """Dispatch natural vs. exact-thinking generation by budget_condition."""
+    if str(budget_condition) == "natural":
+        text, think_tokens, margins, ent, seq = H.generate_natural(
+            model, tok, prompt_text, max_new_tokens=max_new_tokens,
+            temperature=decode_temp, top_p=decode_top_p, seed=seed,
+        )
+    else:
+        budget = int(budget_condition)
+        text, think_tokens, margins, ent, seq = H.generate_exact_thinking(
+            model, tok, prompt_text, thinking_budget=budget,
+            temperature=decode_temp, top_p=decode_top_p, seed=seed,
+        )
+    return text, think_tokens, margins, ent, seq
+
+
+def collect_trace(model, tok, model_meta, prompt, matcher, *,
+                  domain, budget_condition="natural", seed=0,
+                  decode_temp=0.6, decode_top_p=0.95, max_new_tokens=16384,
+                  prefix_policy="sentence", max_prefixes=8, n_rollouts=8,
+                  rollout_max_new_tokens=4096, store_rollout_texts=False,
+                  layer2=False, attn_layers=None, anchor_policy="most_recent_anchor",
+                  attn_norm_method="per_token_mean", split="extraction",
+                  sample_idx=0, n_samples_per_cell=1):
+    """Run one generation + its commitment curve; return a Trace (surface+metric
+    stage, i.e. Layer 1 populated; Layer 2 populated iff layer2=True).
+
+    prompt: dict from data.load_* (needs prompt_id, prompt_text, gold; safety
+    also anchor_text/induction/preamble_id). matcher: a ConclusionMatcher.
+    """
+    t0 = time.time()
+    prompt_text = prompt["prompt_text"]
+    text, think_tokens, margins, ent, seq = _generate(
+        model, tok, prompt_text, budget_condition, decode_temp, decode_top_p,
+        seed, max_new_tokens,
+    )
+    full_ids = seq  # [1, seq_len]
+    prompt_len = H.build_input_ids(model, tok, prompt_text).shape[1]
+    think_start, think_end = H.find_think_indices(tok, full_ids, prompt_len)
+
+    # Parent conclusion + surface outcome.
+    parent_key = matcher.match(text)
+    final_answer = parent_key
+    outcome = _outcome(domain, matcher, parent_key, prompt["gold"])
+
+    tr = H.Trace(
+        trace_id=str(uuid.uuid4()),
+        domain=domain,
+        model=model_meta["model"],
+        model_revision=model_meta.get("model_revision", ""),
+        dataset=prompt.get("dataset", ""),
+        prompt_id=prompt["prompt_id"],
+        prompt_text=prompt_text,
+        budget_condition=str(budget_condition),
+        thinking_tokens=int(think_tokens),
+        response_text=text,
+        final_answer=final_answer,
+        outcome=outcome,
+        gold=str(prompt["gold"]),
+        scorer_version=scorer_version(matcher),
+        decode_temp=decode_temp,
+        decode_top_p=decode_top_p,
+        seed=seed,
+        wall_clock_sec=0.0,
+        chat_template_version=model_meta.get("chat_template_version", ""),
+        induction=prompt.get("induction", "natural"),
+        preamble_id=prompt.get("preamble_id"),
+        sample_idx=sample_idx,
+        n_samples_per_cell=n_samples_per_cell,
+        commitment_margin=margins,
+        entropy_trace=ent,
+        think_start_idx=int(think_start),
+        think_end_idx=int(think_end),
+        split=split,
+    )
+    if getattr(matcher, "last_confidence", None) is not None:
+        tr.scorer_confidence = matcher.last_confidence
+
+    # --- Layer 1: truncation + free rollout (THE commitment definition) ---
+    if parent_key is not None:
+        positions = H.choose_prefix_positions(
+            tok, full_ids, think_start, think_end,
+            policy=prefix_policy, max_prefixes=max_prefixes,
+        )
+        if positions:
+            match_fn = to_match_fn(matcher, parent_key)
+            curve, texts = H.rollout_commitment_curve(
+                model, tok, full_ids, positions, match_fn,
+                n_rollouts=n_rollouts, temperature=decode_temp, top_p=decode_top_p,
+                base_seed=seed, max_new_tokens=rollout_max_new_tokens,
+                store_texts=store_rollout_texts,
+            )
+            tr.rollout_prefix_positions = positions
+            tr.n_rollouts_per_prefix = n_rollouts
+            tr.rollout_outcomes = curve
+            tr.rollout_completion_texts = texts
+            tr.rollout_decode_temp = decode_temp
+            tr.rollout_decode_top_p = decode_top_p
+            tr.rollout_seed = seed
+
+    # --- Layer 2: attention-to-anchor proxy (optional, calibrate separately) ---
+    if layer2 and parent_key is not None:
+        _attach_layer2(tr, model, tok, full_ids, prompt, attn_layers,
+                       anchor_policy, attn_norm_method, gen_start_idx=prompt_len)
+
+    tr.wall_clock_sec = round(time.time() - t0, 3)
+    return tr
+
+
+def _attach_layer2(tr, model, tok, full_ids, prompt, attn_layers,
+                   anchor_policy, attn_norm_method, gen_start_idx):
+    anchor_text = prompt.get("anchor_text") or prompt.get("question") or prompt["prompt_text"]
+    span = H.find_prompt_anchor_span(tok, anchor_text, full_ids)
+    if span is None:
+        tr.notes = (tr.notes + "; " if tr.notes else "") + "anchor span not found"
+        return
+    anchor_spans = [span]
+    if attn_layers is None:
+        n = len(model.model.layers)
+        attn_layers = [n // 2]
+    mass = H.compute_attn_to_anchor(model, full_ids, attn_layers, anchor_spans)
+    layer = attn_layers[0]
+    vec = H.reduce_anchor_mass(mass[layer], anchor_spans, anchor_policy,
+                               attn_norm_method, gen_start_idx)
+    tr.anchor_spans = anchor_spans
+    tr.anchor_policy = anchor_policy
+    tr.attn_norm_method = attn_norm_method
+    tr.attn_to_anchor = vec
+    tr.attn_layers_used = list(attn_layers)
+
+
+def _outcome(domain, matcher, key, gold):
+    if domain == "math":
+        # matcher may expose outcome(); fall back to key==gold
+        if hasattr(matcher, "outcome"):
+            return matcher.outcome(key, gold)
+        return "correct" if key is not None and key == gold else "incorrect"
+    # safety: gold is the good outcome name ("refused"); key is refuse/comply
+    if key is None:
+        return "unknown"
+    return "refused" if key == "refuse" else "complied"
