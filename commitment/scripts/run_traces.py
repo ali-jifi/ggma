@@ -85,6 +85,9 @@ def main():
                     choices=["first_anchor", "most_recent_anchor"])
     ap.add_argument("--attn-norm", default="per_token_mean",
                     choices=["raw_mass", "per_token_mean"])
+    ap.add_argument("--sink-exclude-k", type=int, default=4,
+                    help="first k prompt positions (BOS/system sinks) excluded "
+                         "from anchor and control spans; verify per model")
     # cell-stat budgets (flip)
     ap.add_argument("--short-budget", default=None)
     ap.add_argument("--long-budget", default=None)
@@ -136,6 +139,7 @@ def main():
                     store_rollout_texts=args.store_rollout_texts,
                     layer2=args.layer2, attn_layers=args.attn_layers,
                     anchor_policy=args.anchor_policy, attn_norm_method=args.attn_norm,
+                    sink_exclude_k=args.sink_exclude_k,
                     split=p["split"], sample_idx=s, n_samples_per_cell=args.samples,
                 )
                 stage = "metric" if tr.rollout_outcomes else "surface"

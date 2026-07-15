@@ -8,7 +8,9 @@ The three commitment layers (see `harness.py` docstring, rule R1):
 - **Layer 1** - truncate the trace at prefixes, free-sample `k` rollouts from
   each, score with the matcher. `P(final conclusion | prefix)` = the commitment
   curve. This is *the* definition.
-- **Layer 2** - attention-to-anchor, a cheap proxy calibrated against Layer 1.
+- **Layer 2** - sink-corrected attention-to-anchor (anchor mass minus a
+  length-matched control span, sink tokens excluded from both), a cheap proxy
+  calibrated against Layer 1.
 - **Margin/entropy** - secondary proxy, never the definition.
 
 ## Layout
@@ -196,6 +198,7 @@ Rollouts dominate; scale them down first if a run is too slow/large.
 | `--dtype` | bfloat16 (default) / float16 | use float16 on pre-Ampere GPUs (Colab T4) |
 | `--attn` | sdpa (default) / eager | eager only for `--layer2` (auto-forced) |
 | `--layer2` | capture + attn proxy | forces eager; keep budgets ≤4096, small batch |
+| `--sink-exclude-k` | sink positions excluded from Layer 2 spans | default 4; verify per model against the mean attention profile |
 
 To estimate a run's wall time, read a completed trace's self-timed field:
 `(Get-Content commitment\outputs\traces\smoke.jsonl | ConvertFrom-Json).wall_clock_sec`,

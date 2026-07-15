@@ -11,10 +11,15 @@ Rules (from harness R1/R2):
     steering_condition="none". A calibration is valid only for the steering
     condition it was fit under.
 
-Pairing: attn_to_anchor is indexed from the first generated token, which is
+Proxy: the sink-corrected signal attn_to_anchor - attn_to_control. Rows lacking
+attn_to_control (pre-correction traces) are used only if NO corrected rows
+exist, never mixed with corrected ones; the artifact meta records which via
+"sink_corrected".
+
+Pairing: both arrays are indexed from the first generated token, which is
 think_start_idx (pipeline passed gen_start_idx=prompt_len=think_start_idx). So
 for rollout prefix j at absolute token position p = rollout_prefix_positions[j],
-the proxy value is attn_to_anchor[p - think_start_idx] and the target is
+the proxy value is corrected[p - think_start_idx] and the target is
 rollout_outcomes[j].
 
 Usage:
@@ -35,9 +40,12 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(REPO_ROOT))
 
 
-def build_pairs(rows, split, steering):
+def build_pairs(rows, split, steering, corrected=True):
     """Return (x, y, meta_row) pooled over eligible traces. meta_row is the
-    first contributing row, used to stamp layer/policy/norm on the artifact."""
+    first contributing row, used to stamp layer/policy/norm on the artifact.
+    corrected=True uses attn_to_anchor - attn_to_control and skips rows
+    without attn_to_control; corrected=False uses raw attn_to_anchor (legacy
+    pre-correction rows only)."""
     x, y, meta_row = [], [], None
     kept = skipped = 0
     for r in rows:
@@ -46,9 +54,13 @@ def build_pairs(rows, split, steering):
         if r.get("steering_condition", "none") != steering:
             continue
         attn = r.get("attn_to_anchor")
+        ctrl = r.get("attn_to_control")
         curve = r.get("rollout_outcomes")
         positions = r.get("rollout_prefix_positions")
         if not attn or not curve or not positions:
+            skipped += 1
+            continue
+        if corrected and (not ctrl or len(ctrl) != len(attn)):
             skipped += 1
             continue
         ts = r.get("think_start_idx", -1)
@@ -59,7 +71,8 @@ def build_pairs(rows, split, steering):
         for j, p in enumerate(positions):
             k = p - ts
             if 0 <= k < len(attn) and j < len(curve):
-                x.append(float(attn[k]))
+                v = attn[k] - ctrl[k] if corrected else attn[k]
+                x.append(float(v))
                 y.append(float(curve[j]))
                 contributed = True
         if contributed:
@@ -95,9 +108,18 @@ def main():
     )
 
     rows = load_traces(args.traces)
+    sink_corrected = True
     x, y, meta_row, kept, skipped = build_pairs(rows, args.split, args.steering)
+    if not x:
+        sink_corrected = False
+        x, y, meta_row, kept, skipped = build_pairs(rows, args.split,
+                                                    args.steering, corrected=False)
+        if x:
+            print("[cal] WARNING: no sink-corrected rows; falling back to raw "
+                  "attn_to_anchor (legacy traces). Re-collect with the current "
+                  "harness for a corrected calibration.")
     print(f"[cal] traces contributing: {kept}, skipped: {skipped}, "
-          f"pairs: {len(x)}")
+          f"pairs: {len(x)}, sink_corrected: {sink_corrected}")
     if len(x) < 3:
         raise SystemExit("not enough (proxy, outcome) pairs to fit; collect more "
                          "Layer 2 traces on the selection split first")
@@ -116,6 +138,8 @@ def main():
         "layer": layer,
         "anchor_policy": anchor_policy,
         "attn_norm_method": norm_method,
+        "sink_corrected": sink_corrected,
+        "sink_exclude_k": meta_row.get("sink_exclude_k"),
         "n_points": len(x),
         "traces_file": str(args.traces),
     }

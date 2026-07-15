@@ -12,7 +12,9 @@ FROZEN vs ITERABLE:
 Supersedes v1. Changes:
   - Trace schema upgraded to the full seven-group v2 spec (flat, single class).
   - Layer 1 commitment: truncation + free rollout (THE commitment definition).
-  - Layer 2 commitment: attention-to-anchor proxy + calibration against Layer 1.
+  - Layer 2 commitment: sink-corrected attention-to-anchor proxy (anchor mass
+    minus length-matched control-span mass, sink tokens excluded from both)
+    + calibration against Layer 1.
   - Margin demoted to secondary proxy (kept, never the definition, never an
     extraction regression target).
   - flip fields are CELL-level (computed across resamples), not per-row labels.
@@ -44,7 +46,7 @@ import torch
 import torch.nn.functional as F
 from transformers import LogitsProcessor
 
-HARNESS_VERSION = "0.2.0"
+HARNESS_VERSION = "0.3.0"
 SCHEMA_VERSION = "trace-v2"
 
 VALID_SPLITS = ("extraction", "selection", "heldout")
@@ -105,10 +107,14 @@ class Trace:
     rollout_seed: Optional[int] = None
 
     # ---- GROUP 4: commitment, Layer 2 (cheap proxies) ----
-    anchor_spans: list = field(default_factory=list)      # [[start, end), ...] absolute token idx
+    anchor_spans: list = field(default_factory=list)      # [[start, end), ...] absolute token idx, sink-excluded
     anchor_policy: Optional[str] = None                   # pre-registered
     attn_norm_method: Optional[str] = None                # pre-registered
     attn_to_anchor: list = field(default_factory=list)    # one value per generated-token position
+    sink_exclude_k: int = 4                               # first k prompt positions excluded from every span
+    control_spans: list = field(default_factory=list)     # length-matched non-anchor prompt spans
+    control_span_len: Optional[int] = None                # actual total control tokens (== anchor len when possible)
+    attn_to_control: list = field(default_factory=list)   # one value per generated-token position
     attn_layers_used: list = field(default_factory=list)
     calibration_id: Optional[str] = None
     calibrated_under_steering: bool = False               # R2
@@ -165,6 +171,11 @@ def validate_trace(t: Trace, stage: str = "surface"):
                 errs.append("attn_to_anchor present without valid anchor_policy")
             if t.attn_norm_method not in VALID_ATTN_NORM:
                 errs.append("attn_to_anchor present without valid attn_norm_method")
+            if not t.attn_to_control:
+                errs.append("attn_to_anchor present without attn_to_control "
+                            "(sink correction is mandatory)")
+            elif len(t.attn_to_control) != len(t.attn_to_anchor):
+                errs.append("attn_to_anchor/attn_to_control length mismatch")
     if stage == "steered":
         if t.steering_condition == "none":
             errs.append("steered stage but steering_condition='none'")
@@ -440,8 +451,57 @@ def _ensure_closed(text):
 
 
 # =============================================================================
-# LAYER 2: ATTENTION-TO-ANCHOR. Cheap proxy; calibrate against Layer 1.
+# LAYER 2: SINK-CORRECTED ATTENTION-TO-ANCHOR. Cheap proxy; calibrate against
+# Layer 1. Signal = attn_to_anchor - attn_to_control, sink tokens excluded from
+# both spans (raw anchor mass partly measures attention-sink behavior, which
+# concentrates at sequence start and has its own length-dependent decay).
 # =============================================================================
+
+def exclude_sink_tokens(spans, sink_exclude_k):
+    """Clip the first sink_exclude_k token positions (BOS / system-template
+    sinks) out of every [start, end) span; drop spans that become empty."""
+    out = []
+    for s, e in spans:
+        s = max(s, sink_exclude_k)
+        if s < e:
+            out.append([s, e])
+    return out
+
+
+def find_control_span(anchor_spans, prompt_len, sink_exclude_k=4):
+    """Build length-matched, sink-excluded prompt spans that are NOT the anchor
+    (chat-template boilerplate, instruction scaffolding). Targets the same
+    total token count as the anchor spans, or as close as the prompt allows.
+    Returns (control_spans, control_span_len); ([], 0) if no eligible tokens.
+
+    Longest contiguous runs are taken first (fewest fragments), the last run
+    trimmed to hit the target length."""
+    target = sum(e - s for s, e in anchor_spans)
+    in_anchor = [False] * prompt_len
+    for s, e in anchor_spans:
+        for i in range(max(s, 0), min(e, prompt_len)):
+            in_anchor[i] = True
+    runs, start = [], None
+    for i in range(sink_exclude_k, prompt_len):
+        if not in_anchor[i]:
+            if start is None:
+                start = i
+        elif start is not None:
+            runs.append([start, i])
+            start = None
+    if start is not None:
+        runs.append([start, prompt_len])
+    runs.sort(key=lambda r: r[1] - r[0], reverse=True)
+    spans, total = [], 0
+    for s, e in runs:
+        if total >= target:
+            break
+        take = min(e - s, target - total)
+        spans.append([s, s + take])
+        total += take
+    spans.sort()
+    return spans, total
+
 
 def find_prompt_anchor_span(tokenizer, prompt_text, full_ids):
     """Locate the prompt-content tokens (the question / harmful request) inside
@@ -527,7 +587,8 @@ class AttnToAnchorRecorder:
 @torch.no_grad()
 def compute_attn_to_anchor(model, full_ids, layers, anchor_spans):
     """One teacher-forced forward pass; returns {layer: tensor[n_spans, seq]}
-    of raw heads-averaged attention mass onto each anchor span."""
+    of raw heads-averaged attention mass onto each span. Pass anchor and
+    control spans concatenated to measure both in the same pass."""
     seq_len = full_ids.shape[1]
     with AttnToAnchorRecorder(model, layers, anchor_spans, seq_len) as rec:
         model(full_ids)
@@ -566,6 +627,20 @@ def reduce_anchor_mass(per_span_mass_layer, anchor_spans, policy, norm_method,
             vec[q] = m[k, q]
     else:
         raise ValueError(policy)
+    return vec[gen_start_idx:].tolist()
+
+
+def reduce_control_mass(per_span_mass_layer, control_spans, norm_method,
+                        gen_start_idx):
+    """Reduce the control spans' [n_spans, seq] raw-mass tensor to the schema's
+    attn_to_control array. Control spans act as one pooled span: total mass,
+    normalized by total control length under per_token_mean."""
+    vec = per_span_mass_layer.sum(dim=0)  # [seq]
+    if norm_method == "per_token_mean":
+        total = sum(e - s for s, e in control_spans)
+        vec = vec / max(total, 1)
+    elif norm_method != "raw_mass":
+        raise ValueError(norm_method)
     return vec[gen_start_idx:].tolist()
 
 

@@ -36,8 +36,8 @@ def collect_trace(model, tok, model_meta, prompt, matcher, *,
                   prefix_policy="sentence", max_prefixes=8, n_rollouts=8,
                   rollout_max_new_tokens=4096, store_rollout_texts=False,
                   layer2=False, attn_layers=None, anchor_policy="most_recent_anchor",
-                  attn_norm_method="per_token_mean", split="extraction",
-                  sample_idx=0, n_samples_per_cell=1):
+                  attn_norm_method="per_token_mean", sink_exclude_k=4,
+                  split="extraction", sample_idx=0, n_samples_per_cell=1):
     """Run one generation + its commitment curve; return a Trace (surface+metric
     stage, i.e. Layer 1 populated; Layer 2 populated iff layer2=True).
 
@@ -114,34 +114,55 @@ def collect_trace(model, tok, model_meta, prompt, matcher, *,
             tr.rollout_decode_top_p = decode_top_p
             tr.rollout_seed = seed
 
-    # --- Layer 2: attention-to-anchor proxy (optional, calibrate separately) ---
+    # --- Layer 2: sink-corrected attention-to-anchor proxy (optional) ---
     if layer2 and parent_key is not None:
         _attach_layer2(tr, model, tok, full_ids, prompt, attn_layers,
-                       anchor_policy, attn_norm_method, gen_start_idx=prompt_len)
+                       anchor_policy, attn_norm_method, sink_exclude_k,
+                       gen_start_idx=prompt_len, prompt_len=prompt_len)
 
     tr.wall_clock_sec = round(time.time() - t0, 3)
     return tr
 
 
 def _attach_layer2(tr, model, tok, full_ids, prompt, attn_layers,
-                   anchor_policy, attn_norm_method, gen_start_idx):
+                   anchor_policy, attn_norm_method, sink_exclude_k,
+                   gen_start_idx, prompt_len):
+    def _note(msg):
+        tr.notes = (tr.notes + "; " if tr.notes else "") + msg
+
     anchor_text = prompt.get("anchor_text") or prompt.get("question") or prompt["prompt_text"]
     span = H.find_prompt_anchor_span(tok, anchor_text, full_ids)
     if span is None:
-        tr.notes = (tr.notes + "; " if tr.notes else "") + "anchor span not found"
+        _note("anchor span not found")
         return
-    anchor_spans = [span]
+    anchor_spans = H.exclude_sink_tokens([span], sink_exclude_k)
+    if not anchor_spans:
+        _note("anchor span empty after sink exclusion")
+        return
+    control_spans, control_len = H.find_control_span(
+        anchor_spans, prompt_len, sink_exclude_k)
+    if not control_spans:
+        _note("no control span (uncorrected Layer 2 is unusable, skipped)")
+        return
     if attn_layers is None:
         n = len(model.model.layers)
         attn_layers = [n // 2]
-    mass = H.compute_attn_to_anchor(model, full_ids, attn_layers, anchor_spans)
+    # anchor + control measured in the same teacher-forced pass
+    mass = H.compute_attn_to_anchor(model, full_ids, attn_layers,
+                                    anchor_spans + control_spans)
     layer = attn_layers[0]
-    vec = H.reduce_anchor_mass(mass[layer], anchor_spans, anchor_policy,
-                               attn_norm_method, gen_start_idx)
+    n_anchor = len(anchor_spans)
+    tr.attn_to_anchor = H.reduce_anchor_mass(
+        mass[layer][:n_anchor], anchor_spans, anchor_policy,
+        attn_norm_method, gen_start_idx)
+    tr.attn_to_control = H.reduce_control_mass(
+        mass[layer][n_anchor:], control_spans, attn_norm_method, gen_start_idx)
     tr.anchor_spans = anchor_spans
     tr.anchor_policy = anchor_policy
     tr.attn_norm_method = attn_norm_method
-    tr.attn_to_anchor = vec
+    tr.sink_exclude_k = sink_exclude_k
+    tr.control_spans = control_spans
+    tr.control_span_len = control_len
     tr.attn_layers_used = list(attn_layers)
 
 
