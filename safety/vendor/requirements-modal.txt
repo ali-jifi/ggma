@@ -1,0 +1,27 @@
+# Remote (in-container) deps for safety/modal_safety_test on Modal.
+# Pared down from the pins used for the local replication: dropped the vLLM/Together
+# judge stack (litellm, python-dotenv), the CE-loss data stack (datasets, pandas,
+# zstandard), plots (matplotlib), and pipeline-only typing (jaxtyping, typeguard,
+# transformers-stream-generator). What remains loads a HF causal-LM, runs harness.py
+# + steering_primitives.py, and the HarmBench classifier.
+#
+# transformers 4.44.2 covers the Qwen2-family debug/anchor models
+# (DeepSeek-R1-Distill-Qwen-1.5B/14B, DeepSeek-R1-Distill-Llama-8B/70B).
+# BUMP to transformers>=4.51 before running Qwen3-14B / Qwen3-30B-A3B (MoE).
+
+# --- core: model + steering + harness ---
+torch==2.3.0
+transformers==4.44.2
+accelerate==0.31.0
+safetensors==0.4.3
+huggingface-hub==0.23.3
+sentencepiece==0.2.0
+protobuf==5.27.1
+numpy==1.26.4           # harness.py
+
+# --- tokenizer/runtime insurance for the Qwen family ---
+tiktoken==0.7.0
+einops==0.8.0
+
+# --- misc ---
+tqdm==4.66.4
