@@ -6,11 +6,16 @@ here** — `fetch_datasets.py` builds it from canonical upstreams into `data/` (
 ```bash
 python fetch_datasets.py            # fetch + split (run once before the eval)
 python fetch_datasets.py --check    # verify data/ against MANIFEST.json
+python ../smoke_datasets.py         # data-level smoke check — no model, no network
 ```
+
+The registry, sampler, and metrics live one level up: `safety/datasets.py` (what each set
+is FOR and which judge scores it) and `safety/metrics.py` (ASR / refusal / false-refusal,
+with the harmful-vs-benign sign handled).
 
 | File | What it is |
 |---|---|
-| `fetch_datasets.py` | Fetches HarmBench, AdvBench, and Alpaca from their own repos at **pinned commits**, applies our seeded extraction/test splits, writes `data/` + `MANIFEST.json` (SHAs, seed, per-file md5). |
+| `fetch_datasets.py` | Fetches HarmBench, SORRY-Bench, AdvBench, XSTest, Alpaca, and OR-Bench from their own repos at **pinned commits**, applies our seeded extraction/test splits, writes `data/` + `MANIFEST.json` (SHAs, seed, per-file md5). SORRY-Bench is gated — see `DATASET_SOURCES.md`. |
 | `DATASET_SOURCES.md` | What each set is, the role the research proposal assigns it, licensing, and the known method gap. **Read this first.** |
 | `harmbench_judge.py` | Substring refusal check + `LLAMA2_CLS_PROMPT` + per-category ASR aggregation, with the HarmBench classifier injected as `judge_fn` (no vLLM, no Together). Three upstream origins — see its header. |
 | `licenses/` | Full license texts for every upstream whose code or data we touch. |
@@ -33,14 +38,19 @@ Two things worth knowing up front:
 - **Alpaca data is CC BY-NC 4.0 — non-commercial.** Alpaca licenses its data CC BY-NC and
   only its *code* Apache-2.0; downstream projects routinely conflate the two. No ShareAlike,
   so it does not affect the license of our own code.
-- **HarmBench and AdvBench are MIT.** One HarmBench LICENSE covers both its code and its
-  behaviors.
+- **HarmBench, AdvBench and XSTest are MIT**; OR-Bench is CC BY-4.0. One HarmBench LICENSE
+  covers both its code and its behaviors.
+- **SORRY-Bench is gated and its licence forbids redistribution** — never commit or re-host
+  those prompts, and never source them from an ungated mirror (mirrors are violations, and
+  all carry a superseded version with incompatible category numbering).
 
 The judge **model** `cais/HarmBench-Llama-2-13b-cls` is a Llama-2 fine-tune (Llama 2
 Community License) — downloaded at runtime, not vendored here.
 
 ## A note on the contents
 
-`fetch_datasets.py` downloads standard red-teaming benchmarks (HarmBench, AdvBench) used to
-measure refusal behavior. The prompts are harmful by construction — that is what makes them
-a benchmark — and all are published openly by the upstream projects linked above.
+`fetch_datasets.py` downloads standard red-teaming benchmarks (HarmBench, AdvBench,
+SORRY-Bench) used to measure refusal behavior, alongside benign control sets (XSTest,
+Alpaca, OR-Bench) used to check that an intervention was specific rather than damaging. The
+harmful prompts are harmful by construction — that is what makes them a benchmark — and are
+published by the upstream projects linked above.
