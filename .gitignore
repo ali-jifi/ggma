@@ -4,7 +4,7 @@ __pycache__/
 venv/
 
 # generated collection + analysis artifacts (regenerable; not source)
-outputs/traces/*.jsonl
-outputs/activations/*.npz
-outputs/figures/
-outputs/*_report.json
+commitment/outputs/traces/*.jsonl
+commitment/outputs/activations/*.npz
+commitment/outputs/figures/
+commitment/outputs/*_report.json

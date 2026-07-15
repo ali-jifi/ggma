@@ -26,4 +26,4 @@ jobs:
         with:
           python-version: "3.13"
       - run: pip install numpy pytest
-      - run: pytest -q tests/
+      - run: pytest -q commitment/tests/

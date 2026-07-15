@@ -5,9 +5,14 @@ target-version = "py313"
 # harness.py + its schema are FROZEN (team sign-off to change). Keep the linter
 # away from it so an autofix can never reformat the engine. outputs/ and .venv/
 # are data/env, not source.
-extend-exclude = ["harness.py", "outputs", ".venv"]
+extend-exclude = ["harness.py", "commitment/outputs", ".venv"]
 
 [lint]
 # F = real bugs (undefined names, unused imports); E/W = style; I = import order.
 select = ["E", "F", "W", "I"]
 ignore = ["E501"]  # long lines are fine in research code
+
+[lint.isort]
+# harness.py lives at repo root; the packages live under commitment/. Mark them
+# all first-party so import grouping is consistent regardless of location.
+known-first-party = ["harness", "matchers", "data", "analysis", "scripts"]

@@ -1,14 +1,14 @@
 """Production trace collection. Sweeps prompts x budgets x resamples, writes v2
-Trace rows to outputs/traces/, and (Group 2) stamps cell-level flip stats once
+Trace rows to commitment/outputs/traces/, and (Group 2) stamps cell-level flip stats once
 all rows for a domain exist. Layer 1 always; Layer 2 optionally (--layer2).
 
 Math:
-  python scripts/run_traces.py --domain math --model <id> \
+  python commitment/scripts/run_traces.py --domain math --model <id> \
       --budgets natural 512 4096 --samples 8 --n 50
 
 Safety (matcher swap only, R4 -- same truncation/sampling/curve machinery):
-  python scripts/run_traces.py --domain safety --model <id> \
-      --harmbench data/harmbench.csv --induction hijack_preamble \
+  python commitment/scripts/run_traces.py --domain safety --model <id> \
+      --harmbench commitment/data/harmbench.csv --induction hijack_preamble \
       --preamble-id <stem> --classifier gordon_refusal:classify \
       --budgets natural 512 4096 --samples 8 --n 50 --layer2
 
@@ -22,8 +22,10 @@ import json
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[1]      # commitment/
+REPO_ROOT = ROOT.parent                          # repo root; harness.py lives here
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(REPO_ROOT))
 
 
 def build_matcher(args):

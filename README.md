@@ -13,37 +13,50 @@ The three commitment layers (see `harness.py` docstring, rule R1):
 
 ## Layout
 
+All commitment-method code lives under `commitment/`; only the frozen engine and
+repo-level config sit at the root.
+
 ```
-harness.py              engine (FROZEN with the schema; do not edit without sign-off)
-matchers/
-  base.py               ConclusionMatcher interface: match(text) -> conclusion_key | None
-  gsm8k_matcher.py      numeric extractor (math side)
-  refusal_matcher.py    wraps Gordon's refusal classifier (safety side); heuristic baseline
-data/
-  common.py             deterministic extraction|selection|heldout split
-  load_gsm8k.py         GSM8K load + \boxed prompt prep
-  load_harmbench.py     HarmBench load + hijack-preamble prep (anchor = request only, R6)
-  preambles/            hijack preamble texts (*.txt; stem = preamble_id)
-scripts/
-  modelio.py            model loading (only place transformers is imported)
-  pipeline.py           collect_trace(): harness + matcher + Layer 1 (+ Layer 2) -> one Trace
-  smoke_test.py         driver: GSM8K prompts, curve-sanity gate (validate here)
-  run_traces.py         production sweep: prompts x budgets x resamples -> JSONL
-  calibrate_layer2.py   fit isotonic Layer 2 proxy -> Layer 1 probability
-analysis/
-  curves.py             curve diagnostics (pure, torch-free, self-testing)
-  plots.py              figures from outputs/ only (never re-runs a model)
-outputs/
-  traces/*.jsonl        v2 Trace rows (the sole collection<->analysis interface)
-  activations/*.npz     activation sidecars
-  calibrations/*.json   saved isotonic fits
-  figures/*.png         plots
+harness.py                        engine (FROZEN with the schema; no edits without sign-off)
+requirements*.txt, ruff.toml      repo-level config
+.github/workflows/ci.yml          CI (lint + torch-free tests)
+commitment/
+  matchers/
+    base.py                       ConclusionMatcher interface: match(text) -> conclusion_key | None
+    gsm8k_matcher.py              numeric extractor (math side)
+    refusal_matcher.py            wraps Gordon's refusal classifier (safety); heuristic baseline
+  data/
+    common.py                     deterministic extraction|selection|heldout split
+    load_gsm8k.py                 GSM8K load + \boxed prompt prep
+    load_harmbench.py             HarmBench load + hijack-preamble prep (anchor = request only, R6)
+    preambles/                    hijack preamble texts (*.txt; stem = preamble_id)
+  scripts/
+    modelio.py                    model loading (only place transformers is imported)
+    pipeline.py                   collect_trace(): harness + matcher + Layer 1 (+ Layer 2) -> one Trace
+    smoke_test.py                 driver: GSM8K prompts, curve-sanity gate (validate here)
+    run_traces.py                 production sweep: prompts x budgets x resamples -> JSONL
+    calibrate_layer2.py           fit isotonic Layer 2 proxy -> Layer 1 probability
+  analysis/
+    curves.py                     curve diagnostics (pure, torch-free, self-testing)
+    plots.py                      figures from outputs/ only (never re-runs a model)
+  tests/test_torchfree.py         matchers, split logic, curves (no GPU)
+  outputs/
+    traces/*.jsonl                v2 Trace rows (the sole collection<->analysis interface)
+    activations/*.npz             activation sidecars
+    calibrations/*.json           saved isotonic fits
+    figures/*.png                 plots
 ```
 
+The drivers put both `commitment/` (for `matchers`/`data`/`analysis`/`scripts`)
+and the repo root (for `harness`) on `sys.path`, so `harness.py` staying at the
+root is invisible to imports. Run drivers from the repo root by their full path,
+e.g. `python commitment/scripts/smoke_test.py`.
+
 Architectural rules (enforced by the layout):
-- `scripts/` and `analysis/` import the harness; nothing imports from them.
-- `outputs/` is the only interface between collection and analysis. Analysis reads
-  JSONL/npz and never re-runs a model.
+- `commitment/scripts/` and `commitment/analysis/` import the harness; nothing
+  imports from them.
+- `commitment/outputs/` is the only interface between collection and analysis.
+  Analysis reads JSONL/npz and never re-runs a model.
 - The freeze rule covers `harness.py` + the Trace schema. Everything else iterates.
 - Matcher swap is the *only* math->safety change (R4): same truncation, same
   sampling, same curve computation.
@@ -103,7 +116,7 @@ unambiguous, a failure means prefix granularity or `k` (rollouts), not the
 harness.
 
 ```
-python scripts/smoke_test.py --model deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B \
+python commitment/scripts/smoke_test.py --model deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B \
     --n 8 --rollouts 4 --rollout-max-new-tokens 1024
 ```
 
@@ -118,7 +131,7 @@ QwQ). A plain instruct model emits no `</think>`, so every trace shows up as
 default, no OOM):
 
 ```
-python scripts/run_traces.py --domain math --model deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B \
+python commitment/scripts/run_traces.py --domain math --model deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B \
     --budgets 512 4096 --samples 4 --n 20 --rollouts 4 --rollout-max-new-tokens 1024
 ```
 
@@ -126,10 +139,10 @@ python scripts/run_traces.py --domain math --model deepseek-ai/DeepSeek-R1-Disti
 keep eager attention in memory, see Memory notes):
 
 ```
-python scripts/run_traces.py --domain math --model deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B \
+python commitment/scripts/run_traces.py --domain math --model deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B \
     --split selection --budgets 1024 --samples 2 --n 20 \
     --rollouts 4 --rollout-max-new-tokens 512 --layer2
-python scripts/calibrate_layer2.py --traces outputs/traces/math.jsonl \
+python commitment/scripts/calibrate_layer2.py --traces commitment/outputs/traces/math.jsonl \
     --split selection --domain math
 ```
 
@@ -137,8 +150,8 @@ python scripts/calibrate_layer2.py --traces outputs/traces/math.jsonl \
 and Gordon's classifier):
 
 ```
-python scripts/run_traces.py --domain safety --model <hf_id> \
-    --harmbench data/harmbench.csv --induction hijack_preamble \
+python commitment/scripts/run_traces.py --domain safety --model <hf_id> \
+    --harmbench commitment/data/harmbench.csv --induction hijack_preamble \
     --preamble-id <stem> --classifier gordon_refusal:classify \
     --budgets 512 4096 --samples 8 --n 50 --layer2
 ```
@@ -146,10 +159,10 @@ python scripts/run_traces.py --domain safety --model <hf_id> \
 `--classifier module:callable` resolves Gordon's classifier behind the same
 `match()` signature.
 
-**5. Analysis** (reads `outputs/` only, never re-runs a model):
+**5. Analysis** (reads `commitment/outputs/` only, never re-runs a model):
 
 ```
-python analysis/plots.py --traces outputs/traces/math.jsonl
+python commitment/analysis/plots.py --traces commitment/outputs/traces/math.jsonl
 ```
 
 ### Config knobs and cost
@@ -170,8 +183,8 @@ Rollouts dominate; scale them down first if a run is too slow/large.
 | `--layer2` | capture + attn proxy | forces eager; keep budgets ≤4096, small batch |
 
 To estimate a run's wall time, read a completed trace's self-timed field:
-`(Get-Content outputs\traces\smoke.jsonl | ConvertFrom-Json).wall_clock_sec`, then
-multiply by the trace count (skip trace 1, CUDA kernel warmup skews it).
+`(Get-Content commitment\outputs\traces\smoke.jsonl | ConvertFrom-Json).wall_clock_sec`,
+then multiply by the trace count (skip trace 1, CUDA kernel warmup skews it).
 
 ### Memory & attention backend
 
@@ -200,17 +213,18 @@ A teammate reproduces the commitment-layer results by following
 - The **safety side** additionally needs a local HarmBench file (`--harmbench`)
   and Gordon's classifier (`--classifier`); neither is required to replicate the
   commitment layers.
-- `.venv/` and `outputs/*.jsonl|*.npz` are gitignored, the teammate regenerates
-  traces, they don't pull yours.
+- `.venv/` and `commitment/outputs/*.jsonl|*.npz` are gitignored, the teammate
+  regenerates traces, they don't pull yours.
 
 ## Tests without a GPU
 
-`matchers/`, `data/`, and `analysis/curves.py` are torch-free and unit-testable:
+`commitment/matchers/`, `commitment/data/`, and `commitment/analysis/curves.py`
+are torch-free and unit-testable:
 
 ```
-python analysis/curves.py         # curve-diagnostic self-test
-python tests/test_torchfree.py    # matchers, split logic, curves (no pytest needed)
-pytest -q tests/                  # same, under pytest
+python commitment/analysis/curves.py         # curve-diagnostic self-test
+python commitment/tests/test_torchfree.py    # matchers, split logic, curves (no pytest needed)
+pytest -q commitment/tests/                  # same, under pytest
 ```
 
 ## Code quality / CI
@@ -225,7 +239,7 @@ Run the same checks locally:
 ```
 pip install -r requirements-dev.txt
 ruff check .        # add --fix to auto-fix
-pytest -q tests/
+pytest -q commitment/tests/
 ```
 
 Optional local pre-commit hook (`.pre-commit-config.yaml`), runs ruff on

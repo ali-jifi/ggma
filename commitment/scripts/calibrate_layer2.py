@@ -18,9 +18,9 @@ the proxy value is attn_to_anchor[p - think_start_idx] and the target is
 rollout_outcomes[j].
 
 Usage:
-  python scripts/calibrate_layer2.py --traces outputs/traces/math.jsonl \
+  python commitment/scripts/calibrate_layer2.py --traces commitment/outputs/traces/math.jsonl \
       --split selection --domain math \
-      --out outputs/calibrations/math_none.json
+      --out commitment/outputs/calibrations/math_none.json
 """
 
 import argparse
@@ -29,8 +29,10 @@ from pathlib import Path
 
 import numpy as np
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[1]      # commitment/
+REPO_ROOT = ROOT.parent                          # repo root; harness.py lives here
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(REPO_ROOT))
 
 
 def build_pairs(rows, split, steering):

@@ -9,8 +9,8 @@ Pass criteria (population-level, via analysis.curves.sanity_check):
 Any single temp-0.6 curve is allowed to be noisy.
 
 Usage:
-  python scripts/smoke_test.py --model <hf_id> --n 30
-  python scripts/smoke_test.py --model <hf_id> --n 8 --prefixes 8 --rollouts 8
+  python commitment/scripts/smoke_test.py --model <hf_id> --n 30
+  python commitment/scripts/smoke_test.py --model <hf_id> --n 8 --prefixes 8 --rollouts 8
 """
 
 import argparse
@@ -18,8 +18,10 @@ import json
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[1]      # commitment/
+REPO_ROOT = ROOT.parent                          # repo root; harness.py lives here
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(REPO_ROOT))
 
 from analysis.curves import curve_report, sanity_check  # noqa: E402
 from data.load_gsm8k import load_gsm8k  # noqa: E402

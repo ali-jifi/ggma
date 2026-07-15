@@ -1,7 +1,7 @@
 """End-to-end per-prompt collection: harness generation -> matcher-scored
 Layer 1 commitment curve -> optional Layer 2 attention proxy -> one Trace row.
 
-Both scripts/smoke_test.py and scripts/run_traces.py call collect_trace so the
+Both commitment/scripts/smoke_test.py and run_traces.py call collect_trace so the
 two never diverge in how a row is built. Nothing here re-implements harness
 mechanics; it only wires them together (the harness stays frozen).
 """
