@@ -2,13 +2,15 @@
 Modal.com launcher for the safety-side reasoning-model eval (Two Drifts).
 
 DEEP integration: generation + steering run on `harness.py` (repo root, shared
-"one copy, both sides" toolkit) + `safety/steering_primitives.py`. The salvaged
-data + judge are vendored into `safety/vendor/`. No gemma.
+"one copy, both sides" toolkit) + `safety/steering_primitives.py`. The judge lives
+in `safety/vendor/`; the datasets are NOT committed — build them first with
+`python safety/vendor/fetch_datasets.py`. No gemma.
 
 What one `modal run` does:
-  * sample harmful prompts from the HarmBench test set (2/category x 6 categories)
+  * sample harmful prompts from the HarmBench test half (2/category x 6 categories)
   * load a DeepSeek-R1-Distill reasoning model; extract a refusal direction for it
-    once via diff-in-means on the harmful/harmless splits (cached in the Volume)
+    once via diff-in-means on the AdvBench (harmful) vs Alpaca (benign) extraction
+    halves, disjoint from anything scored (cached in the Volume)
   * generate BASELINE + refusal-direction-ABLATION completions with thinking on
     (harness.generate_natural: temp 0.6 / top_p 0.95, DeepSeek's recommended decode)
   * score the post-</think> answers with the HarmBench-13B classifier as judge
@@ -38,13 +40,13 @@ HARNESS_PY = REPO_ROOT / "harness.py"                  # shared toolkit at the r
 STEERING_PY = SAFETY_DIR / "steering_primitives.py"
 JUDGE_PY = SAFETY_DIR / "vendor" / "harmbench_judge.py"
 TRACE_EXPORT_PY = MODAL_DIR / "trace_export.py"
-SPLITS_LOCAL = SAFETY_DIR / "vendor" / "splits"
-HARMBENCH_TEST_JSON = SAFETY_DIR / "vendor" / "harmbench_test.json"
+DATA_LOCAL = SAFETY_DIR / "vendor" / "data"            # built by vendor/fetch_datasets.py; git-ignored
+HARMBENCH_TEST_JSON = DATA_LOCAL / "harmbench_test.json"
 REQS = SAFETY_DIR / "vendor" / "requirements-modal.txt"
 SCRATCH_DIR = REPO_ROOT / "do_not_track" / "modal"     # local, git-ignored outputs
 
 LIB_REMOTE = "/root/ggma"                              # single PYTHONPATH root in-container
-SPLITS_REMOTE = f"{LIB_REMOTE}/data/splits"
+DATA_REMOTE = f"{LIB_REMOTE}/data"
 CACHE_DIR = "/cache"                                   # HF cache + direction cache Volume mount
 
 # --- model config (swap MODEL_PATH to change models) --------------------------
@@ -97,8 +99,25 @@ image = (
     .add_local_file(str(STEERING_PY), f"{LIB_REMOTE}/steering_primitives.py")
     .add_local_file(str(JUDGE_PY), f"{LIB_REMOTE}/harmbench_judge.py")
     .add_local_file(str(TRACE_EXPORT_PY), f"{LIB_REMOTE}/trace_export.py")
-    .add_local_dir(str(SPLITS_LOCAL), remote_path=SPLITS_REMOTE)
+    .add_local_dir(str(DATA_LOCAL), remote_path=DATA_REMOTE)
 )
+
+
+def _require_data():
+    """The datasets are not committed — they are fetched from their canonical upstreams
+    at pinned commits. Fail here with an instruction rather than deep inside a container
+    with a FileNotFoundError."""
+    missing = [
+        n for n in ("harmbench_test.json", "advbench_extract.json", "alpaca_benign_extract.json")
+        if not (DATA_LOCAL / n).exists()
+    ]
+    if missing:
+        raise SystemExit(
+            f"Missing dataset(s) in {DATA_LOCAL}: {', '.join(missing)}\n"
+            f"Build them from the canonical upstreams first:\n"
+            f"    python {SAFETY_DIR / 'vendor' / 'fetch_datasets.py'}\n"
+            f"See safety/vendor/DATASET_SOURCES.md for what each set is and why."
+        )
 
 
 # --- helpers ------------------------------------------------------------------
@@ -119,10 +138,10 @@ def _jsonify(obj):
 
 
 def stratified_sample(dataset, n_per_category=2, seed=42):
-    """n prompts per category, deterministic. The HarmBench test set has 6 categories
-    with uneven bucket sizes (16-47), so the default 2/category gives 12 prompts;
-    pass --n-per-category to scale. Sampling per category rather than dataset[:n]
-    keeps every category represented."""
+    """n prompts per category, deterministic. The HarmBench test half has 6 semantic
+    categories with uneven bucket sizes (10-29), so the default 2/category gives 12
+    prompts; pass --n-per-category to scale (3 -> 18, 4 -> 24). Sampling per category
+    rather than dataset[:n] keeps every category represented."""
     rng = random.Random(seed)
     by_cat = {}
     for row in dataset:
@@ -163,11 +182,11 @@ def smoke() -> dict:
 
     assert "{behavior}" in LLAMA2_CLS_PROMPT["prompt"] and "{generation}" in LLAMA2_CLS_PROMPT["prompt"]
 
-    splits = sorted(glob.glob(f"{SPLITS_REMOTE}/*.json"))
-    assert any("harmful_train" in s for s in splits), f"harmful_train split missing: {splits}"
-    assert any("harmless_train" in s for s in splits), f"harmless_train split missing: {splits}"
-    n_harmful = len(json.load(open(f"{SPLITS_REMOTE}/harmful_train.json")))
-    n_harmless = len(json.load(open(f"{SPLITS_REMOTE}/harmless_train.json")))
+    splits = sorted(glob.glob(f"{DATA_REMOTE}/*.json"))
+    assert any("advbench_extract" in s for s in splits), f"advbench_extract missing: {splits}"
+    assert any("alpaca_benign_extract" in s for s in splits), f"alpaca_benign_extract missing: {splits}"
+    n_harmful = len(json.load(open(f"{DATA_REMOTE}/advbench_extract.json")))
+    n_harmless = len(json.load(open(f"{DATA_REMOTE}/alpaca_benign_extract.json")))
 
     hf_user = None
     token = os.environ.get("HF_TOKEN")
@@ -188,8 +207,8 @@ def smoke() -> dict:
         "transformers": transformers.__version__,
         "harness_version": getattr(harness, "HARNESS_VERSION", "?"),
         "schema_version": getattr(harness, "SCHEMA_VERSION", "?"),
-        "n_harmful_train": n_harmful,
-        "n_harmless_train": n_harmless,
+        "n_harmful_extract": n_harmful,
+        "n_harmless_extract": n_harmless,
         "hf_user": hf_user,
         "direction_cached": os.path.exists(f"{DIRECTION_REMOTE}/direction.pt"),
         "extract_layer": EXTRACT_LAYER,
@@ -212,8 +231,11 @@ def _load_or_extract_direction(model, tokenizer):
     if os.path.exists(dpath):
         return torch.load(dpath, map_location=model.device), "cached"
 
-    harmful = [r["instruction"] for r in json.load(open(f"{SPLITS_REMOTE}/harmful_train.json"))]
-    harmless = [r["instruction"] for r in json.load(open(f"{SPLITS_REMOTE}/harmless_train.json"))]
+    # AdvBench is the extraction-side harmful set (proposal: extraction only, never
+    # scored). Alpaca is the benign contrast. Both are extraction halves, disjoint from
+    # anything scored.
+    harmful = [r["instruction"] for r in json.load(open(f"{DATA_REMOTE}/advbench_extract.json"))]
+    harmless = [r["instruction"] for r in json.load(open(f"{DATA_REMOTE}/alpaca_benign_extract.json"))]
     rng = random.Random(GEN_SEED)
     harmful = rng.sample(harmful, min(N_EXTRACT, len(harmful)))
     harmless = rng.sample(harmless, min(N_EXTRACT, len(harmless)))
@@ -425,6 +447,7 @@ def main(seed: int = 42, n_per_category: int = 2, batch_size: int = 8,
     sys.path.insert(0, str(MODAL_DIR))
     from report import render_markdown, render_scores
 
+    _require_data()
     dataset = json.loads(HARMBENCH_TEST_JSON.read_text())
     sample = stratified_sample(dataset, n_per_category=n_per_category, seed=seed)
     n_cats = len({r["category"] for r in sample})

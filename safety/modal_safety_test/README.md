@@ -1,6 +1,6 @@
 # safety/modal_safety_test — reasoning-model safety eval (runs on Modal)
 
-Runs a **20-prompt safety eval** of a DeepSeek-R1-Distill reasoning model on Modal's
+Runs a **small safety eval** of a DeepSeek-R1-Distill reasoning model on Modal's
 serverless GPUs: generate completions (thinking on) under **baseline** vs
 **refusal-direction ablation**, score the post-`</think>` answers with the **HarmBench
 classifier** (`cais/HarmBench-Llama-2-13b-cls`) as LLM-as-judge, and write a per-prompt
@@ -18,7 +18,8 @@ table + aggregate ASR + harness `Trace` rows.
   replication: `Qwen3-30B-A3B` (MoE), `-Llama-70B`. (Bump `transformers>=4.51` in
   `../vendor/requirements-modal.txt` before the Qwen3 models.)
 - **The refusal direction is extracted per model**, once, via diff-in-means on the
-  harmful/harmless splits (`steering_primitives.difference_in_means`) at
+  AdvBench (harmful) vs Alpaca (benign) extraction halves
+  (`steering_primitives.difference_in_means`) at
   `EXTRACT_LAYER` / `EXTRACT_POS`, then cached in the Modal Volume
   (`/cache/directions/<alias>/`). No committed direction is reused.
 - **Decode** = `harness.generate_natural` (temp 0.6 / top_p 0.95 — DeepSeek's
@@ -27,8 +28,11 @@ table + aggregate ASR + harness `Trace` rows.
   (greedy, 1 token, left-trunc) and injected into the vendored `evaluate_jailbreak`
   (`../vendor/harmbench_judge.py`) — no vLLM, no monkeypatch. Substring matching is a
   free cross-check.
-- **Self-contained**: the eval imports nothing from the local replication clone; the
-  dataset, splits, and judge are vendored under `../vendor/`.
+- **Datasets are fetched, not committed**: `../vendor/fetch_datasets.py` pulls HarmBench,
+  AdvBench, and Alpaca from their own repos at pinned commits and applies our seeded
+  extraction/test splits. Scored set = the HarmBench test half (101 prompts, 6 semantic
+  categories) — so `--n-per-category 2` gives 12 prompts, `3` gives 18. See
+  `../vendor/DATASET_SOURCES.md`.
 
 ## One-time setup
 
@@ -36,8 +40,16 @@ Run these from **this directory**.
 
 1. **Modal account** — <https://modal.com> (Starter = $30/mo free credits, no card).
 2. **Install the client**: `uv sync`
-3. **Authenticate**: `uv run modal setup`
-4. **HuggingFace secret** (optional but recommended — avoids anon rate limits; the
+3. **Build the datasets** — they are not committed:
+   ```bash
+   python ../vendor/fetch_datasets.py
+   ```
+   Fetches HarmBench, AdvBench, and Alpaca from their own repos at pinned commits and
+   writes `../vendor/data/` (git-ignored) plus a `MANIFEST.json` of SHAs and md5s.
+   `python ../vendor/fetch_datasets.py --check` re-verifies later. See
+   `../vendor/DATASET_SOURCES.md`.
+4. **Authenticate**: `uv run modal setup`
+5. **HuggingFace secret** (optional but recommended — avoids anon rate limits; the
    DeepSeek-R1-Distill models are ungated):
    ```bash
    uv run modal secret create huggingface HF_TOKEN=hf_xxx
@@ -47,10 +59,10 @@ Run these from **this directory**.
 ## Run it
 
 ```bash
-# 1. Preflight — CPU only, ~$0. Verifies shipped libs, splits, judge template, token.
+# 1. Preflight — CPU only, ~$0. Verifies shipped libs, data, judge template, token.
 uv run modal run app.py::smoke
 
-# 2. The eval (20 prompts). First run also extracts + caches the direction.
+# 2. The eval. First run also extracts + caches the direction.
 #    ./run.sh ALSO saves the full terminal output into the run folder.
 ./run.sh --run-name debug-1
 #    Plain form (no terminal capture):
@@ -99,4 +111,4 @@ long — `MAX_NEW_TOKENS` (default 2048) and the L4 `timeout` (3600s) are tunabl
 - `report.py` — stdlib renderers for `results.md` (table) and `scores.txt` (compact ASR).
 - `run.sh` — launcher that tees the full terminal output into the run folder.
 - `pyproject.toml` — pins the modal client (only local dependency).
-- `../vendor/` — vendored dataset, splits, judge, and remote requirements.
+- `../vendor/` — dataset fetcher, judge, licenses, and remote requirements.
