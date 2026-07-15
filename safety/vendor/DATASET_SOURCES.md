@@ -67,7 +67,7 @@ Splits are stratified by category. Category sizes are very uneven (OR-Bench hard
 | `alpaca_*` | 2000 / 1000 / 1000 | Sampled from Alpaca's 31,323 `input == ""` rows. |
 | `orbench_*` | 4000 / 2000 / 2000 | Stratified sample of or-bench-80k. |
 | `orbench_hard_*` | 1319 / 659 / 660 | or-bench-hard-1k in full. |
-| `sorrybench_*` | 440 | **Gated** — see below. |
+| `sorrybench_*` | 440 / 220 / 220 | 44 categories x 10, category **names** resolved from `meta_info.py`. **Gated** — see below. |
 
 `harmbench_all.json` keeps the `copyright` and `contextual` behaviors even though only
 `standard` is scored: copyright behaviors need HarmBench's separate copyright classifier,
@@ -102,9 +102,11 @@ These are real and each would silently corrupt results rather than fail loudly.
 - **HarmBench canonical is 400 behaviors with `BehaviorID`/`Tags`/`ContextString`.** Any
   159-row two-field copy is somebody's derived subset, not the benchmark.
 
-## SORRY-Bench is gated — a manual step only you can do
+## SORRY-Bench is gated
 
-`fetch_datasets.py` reports this and keeps going; everything else works without it.
+Access was accepted on 2026-07-15 and the set now builds: 440 base prompts, 44 categories,
+10 each. If a collaborator hits HTTP 401/403, `fetch_datasets.py` reports this and keeps
+going — everything else works without it. To enable it on a new machine or account:
 
 1. Visit <https://huggingface.co/datasets/sorry-bench/sorry-bench-202503> while logged in
    and accept the SORRY-Bench Dataset License Agreement (it asks for Name, Affiliation,
@@ -115,37 +117,78 @@ These are real and each would silently corrupt results rather than fail loudly.
 A token alone is not enough: `gated=auto` still requires a human to accept the terms, which
 is a licence assent decision, not something a script should click through.
 
+**Category names come from `meta_info.py`**, fetched beside the data so the numbering always
+matches the release. The raw file carries only a bare integer per row, and those integers are
+renumbered between releases — so an id alone is both unreadable and unstable across versions.
+
 **Do not use an ungated mirror.** The SORRY-Bench data licence forbids redistribution
 ("you should not distribute, copy, disclose, assign, sublicense, embed, host, or otherwise
 transfer the dataset to any third party"), so the mirrors exist in violation of it — and
 every known mirror carries the superseded 202406 release with the incompatible category
 numbering. For the same reason these prompts must never be committed or re-hosted here.
 
-**A caveat that bears on the generality claim:** SORRY-Bench's taxonomy deliberately
-includes categories its own authors call permissible to comply with (e.g. "Advice on Adult
-Content", "Legal Consulting Advice"). Scoring all 44 with a HarmBench classifier trained on
-a narrower, harder harm distribution will floor ASR there, which can read as "steering
-works" when the classifier simply never fires. Consider reporting first-24 and all-44
-separately.
+**A caveat that bears on the generality claim.** SORRY-Bench's taxonomy deliberately
+includes categories its own authors call permissible to comply with — verified in our build:
+category 25 is "Advice on Adult Content" and 42 is "Legal Consulting Advice". Scoring all 44
+with a HarmBench classifier trained on a narrower, harder harm distribution will floor ASR on
+those, which reads as "steering works" when the classifier simply never fired. Report first-24
+and all-44 side by side: `datasets.sorrybench_prominent(rows)` gives the 240-row first-24
+subset the authors call prominent.
 
-## Metrics (`safety/metrics.py`)
+Verified distinct from the primary set: `sorrybench ∩ harmbench = 0` of 440 prompts — which is
+what the generality claim rests on.
 
-The proposal names five. Three are computable from completions and are implemented:
+## Judges and metrics (`safety/judges.py`, `safety/metrics.py`)
 
-1. **ASR** — harmful sets, fraction complied.
-2. **Refusal rate** — harmful sets, fraction refused.
-3. **False-refusal / over-refusal rate** — benign sets, fraction refused.
+### The judge is HarmBench's own classifier — not LlamaGuard
 
-Two need the paired short-vs-long traces from **Task 1.4** and are defined with the shape
-they will take, so the contract is fixed now rather than invented later:
+`cais/HarmBench-Llama-2-13b-cls`, the benchmark's official judge. **LlamaGuard appears
+nowhere in any of the three planning documents.** (It belongs to the local replication of
+Arditi et al., where Together's LlamaGuard-2 was swapped for Llama-Guard-4-12B — a
+different project.) HarmBench is primary precisely because it ships a judge, and because
+Chain-of-Thought Hijacking — the safety-drift effect being reproduced — scores with the
+same one, keeping our ASR numbers comparable. Substituting any other judge silently
+forfeits that comparability.
 
-4. **compliance-flip rate** — refused-at-short over complied-at-long, the deliberate mirror
-   of the math answer-flip rate.
-5. **ASR / refusal as a function of reasoning length** — binned by think-block length, since
-   the design strips the response-length confound rather than pooling.
+`judges.py` dispatches on the registry, so the wrong judge cannot be pointed at a set:
+
+| Set | Judge | Headline |
+|---|---|---|
+| harmbench, sorrybench | HarmBench classifier (injected — needs a GPU) | ASR |
+| xstest, alpaca, orbench | refusal detector | false-refusal rate |
+| advbench | — raises; never scored | — |
+
+Scoring a harmful set **raises** if the classifier is not supplied, rather than quietly
+falling back to string matching. Per the proposal's own Q9: string matching *"overstates
+refusal and understates attack success, because a response can avoid the trigger phrase
+while still refusing, or comply without an obvious refusal string."* It runs alongside the
+classifier as a documented cross-check and `judge()` reports their `disagreement` rate —
+a response opening "I'm sorry" that then complies is exactly the case it exists to catch.
+
+On benign sets the refusal detector **is** the judge: detecting a refusal is precisely what
+it does, and the HarmBench classifier has nothing to ask (there is no harmful behavior for
+a benign prompt to exhibit).
+
+### The five safety metrics
+
+Per the proposal and the explainer's metrics table — not just ASR:
+
+| Metric | What it captures | Status |
+|---|---|---|
+| **ASR** (HarmBench classifier) | Primary. String matching is a sanity check only. | implemented |
+| **Refusal rate** | "The counterpart to ASR." | implemented |
+| **False-refusal rate** | "The other half of the safety/usefulness trade-off", on benign controls. | implemented |
+| **Compliance-flip rate** | Refused-at-short over complied-at-long — the deliberate mirror of the math answer-flip rate. | contract only — needs Task 1.4 traces |
+| **ASR / refusal vs length** | "The safety-drift curve." | contract only — needs Task 1.4 traces |
+
+The last two need the paired short-vs-long traces Task 1.4 produces. They are defined with
+the shape they will take so the contract is fixed now rather than invented later.
 
 All rates carry a **Wilson 95% interval**: smoke batches are small (n=12), where the normal
 approximation is unusable and 0/12 would otherwise report ±0.00.
+
+The mechanistic metrics (commitment strength + decay curves, subspace overlap via principal
+angles, transfer magnitude, bidirectional transfer) are Phase 2+ and out of Task 1.2 scope.
 
 ## Known gap: the extraction method is not yet the proposal's
 

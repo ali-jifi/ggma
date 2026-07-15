@@ -299,17 +299,36 @@ def fetch_sorrybench():
     assert base, "no rows with prompt_style == 'base' — wrong file? (question_question.jsonl is a mutation)"
     assert len(base) == len(rows), f"expected only base rows in question.jsonl, got {len(base)}/{len(rows)}"
 
+    # Category NAMES, not just ids. The raw file carries a bare integer per row, and those
+    # ids are renumbered between releases — so a bare id is both unreadable and unstable.
+    # meta_info.py is 1-indexed and lives beside the data, so it is always the right
+    # numbering for the version we just pulled.
+    names = {}
+    try:
+        meta = _get(
+            f"https://huggingface.co/datasets/{repo}/resolve/{PINS['sorrybench']}/meta_info.py",
+            token=token,
+        ).decode("utf-8")
+        block = meta.split("category_descriptions", 1)[1].split("[", 1)[1].split("]", 1)[0]
+        descs = [s.strip().strip('"\'') for s in block.split('",') if s.strip().strip('"\', \n')]
+        descs = [d for d in (x.strip().strip('"\'') for x in descs) if d]
+        names = {str(i + 1): d for i, d in enumerate(descs)}
+    except Exception as e:
+        print(f"    (could not read category names from meta_info.py: {e}; ids only)")
+
     out = [
         {
             "instruction": r["turns"][0] if isinstance(r.get("turns"), list) else r.get("turns"),
-            "category": str(r["category"]),
+            "category": names.get(str(r["category"]), str(r["category"])),
+            "category_id": int(r["category"]),
             "question_id": r.get("question_id"),
         }
         for r in base
     ]
     extract, test = _emit("sorrybench", out)
+    n_named = sum(1 for r in out if r["category"] != str(r["category_id"]))
     print(f"  sorrybench: {len(out)} base prompts / {len({r['category'] for r in out})} categories "
-          f"= extract {len(extract)} + test {len(test)}")
+          f"= extract {len(extract)} + test {len(test)}  ({n_named}/{len(out)} rows category-named)")
     print("    NOTE: prompts are licence-restricted — never commit or re-host them.")
 
 

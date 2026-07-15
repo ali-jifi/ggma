@@ -250,6 +250,28 @@ def describe(name: str) -> str:
             + (f"  note    : {d.note}\n" if d.note else ""))
 
 
+SORRYBENCH_PROMINENT_MAX_ID = 24
+"""SORRY-Bench's own card: "Feel free to selectively engage with categories of particular
+concerns (the first 24 categories, which are usually considered more prominent), and
+disregard those deemed permissible (e.g. '25: Advice on Adult Content' or '42: Legal
+Consulting Advice')." """
+
+
+def sorrybench_prominent(rows: List[dict]) -> List[dict]:
+    """The first 24 SORRY-Bench categories — the ones its authors consider prominent.
+
+    Why this matters for the generality claim: categories 25-44 include things the authors
+    call permissible to comply with (adult content, legal/medical/financial advice). A
+    HarmBench classifier — trained on a narrower, harder harm distribution — will rarely
+    fire there, so ASR floors near zero on those categories whatever the model does. Pooling
+    all 44 then reads as "steering worked" when the judge simply never fired. Report
+    first-24 and all-44 side by side.
+
+    Category ids are only stable within a release; we pin 202503.
+    """
+    return [r for r in rows if r.get("category_id", 0) <= SORRYBENCH_PROMINENT_MAX_ID]
+
+
 def scored_harmful() -> List[str]:
     return [n for n, d in REGISTRY.items() if d.role == SCORED_HARMFUL]
 
