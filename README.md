@@ -74,21 +74,36 @@ python -m venv .venv
 ```
 
 **Install the CUDA build of PyTorch first**, matching your GPU. PyPI ships only
-the CPU build, so you must point pip at PyTorch's CUDA wheel index. Check your
-driver's CUDA version with `nvidia-smi` (top-right); a newer driver runs older
-CUDA wheels fine. `cu126` is known-good here:
+the CPU build, so you must point pip at PyTorch's CUDA wheel index. Pick the
+index by **GPU architecture**, not driver version, a recent driver will happily
+load a wheel that contains no kernels for your card:
+
+| GPU | Index | Notes |
+|-----|-------|-------|
+| RTX 30xx / 40xx (Ampere, Ada; `sm_86`/`sm_89`) | `cu126` | developed here (3090 Ti) |
+| RTX 50xx (Blackwell; `sm_120`) | `cu130` | `cu126`/`cu128`/`cu129` ship no `sm_120` kernels |
 
 ```powershell
-# PowerShell (Windows). Newer drivers are backward-compatible with cu126.
+# PowerShell (Windows). Swap cu126 -> cu130 on a 50-series card.
 .\.venv\Scripts\python.exe -m pip install "torch==2.13.0" --index-url https://download.pytorch.org/whl/cu126
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-Verify the GPU is visible (must print `True`):
+On Blackwell `cu130` is a floor, not a preference: the `cu128` and `cu129`
+indexes top out at torch 2.11 and 2.9, so the pinned `torch==2.13.0` does not
+exist there at all. `cu132` also carries it if you need a newer runtime.
+
+Verify with a real kernel launch:
 
 ```powershell
-.\.venv\Scripts\python.exe -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+.\.venv\Scripts\python.exe -c "import torch; x=torch.randn(1000,1000,device='cuda'); print((x@x).sum().item())"
 ```
+
+A number printed with no warning = working. Do **not** gate on
+`torch.cuda.is_available()`: it only checks that the driver and runtime loaded,
+so it returns `True` on a wheel with no kernels for your card, and the real
+failure surfaces later as `no kernel image is available for execution on the
+device`.
 
 Notes:
 - **Activating vs. calling by path.** `.\.venv\Scripts\Activate.ps1` in
@@ -261,6 +276,9 @@ red, worth turning on before the handoff so your teammate can't merge a break.
 | `KeyError: 'shape'` / `AttributeError` in `apply_chat_template` | `transformers` 5.x returns a dict, harness expects a tensor | `pip install "transformers>=4.45,<5"` |
 | `CUDA out of memory` ending in `eager_attention_forward`/`softmax` | eager attention's O(seq²) matrix | use `sdpa` (default); for `--layer2` shorten budget/rollouts |
 | `torch.cuda.is_available()` is `False` | CPU-only torch installed | reinstall from the CUDA wheel index (see setup) |
+| `no kernel image is available for execution`, or a `sm_120 is not compatible` warning while `is_available()` still prints `True` | torch wheel has no kernels for your GPU arch (e.g. `cu126` on a 50-series) | reinstall from an index that covers it, `cu130` on Blackwell (see setup) |
+| `Could not find a version that satisfies the requirement torch==2.13.0` from a CUDA index | that index doesn't carry 2.13.0 (`cu128` stops at 2.11, `cu129` at 2.9) | use `cu130` or `cu132` |
+| `pip install` says `Requirement already satisfied` when switching CUDA builds | `==2.13.0` matches the installed `2.13.0+cu126` local tag, so pip no-ops | `pip uninstall -y torch` first, then install from the new index |
 | every trace `(no curve: parent uncommitted)` | model doesn't emit `</think>` | use a reasoning model (DeepSeek-R1-Distill etc.) |
 | watcher shows `0 / 30` traces | wrong working directory | `cd` into `ggma/`, or use absolute path to `outputs/` |
 | `..venvScriptsActivate.ps1: command not found` | PowerShell syntax in Git Bash | `source .venv/Scripts/activate` |

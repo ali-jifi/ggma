@@ -2,7 +2,9 @@
 #
 # STEP 1 -- install torch SEPARATELY from the CUDA wheel index. It is NOT pinned
 # here on purpose: the freeze tag (e.g. torch==2.13.0+cu126) is machine-specific
-# and does not resolve from PyPI. Pick the CUDA build matching your GPU/driver:
+# and does not resolve from PyPI. Pick the build by GPU ARCH, not driver version:
+#     30xx/40xx (Ampere/Ada):   .../whl/cu126
+#     50xx (Blackwell, sm_120): .../whl/cu130   (cu128/cu129 have no torch 2.13.0)
 #     pip install "torch==2.13.0" --index-url https://download.pytorch.org/whl/cu126
 #   (CPU-only, torch-free tests only:  pip install torch)
 #
