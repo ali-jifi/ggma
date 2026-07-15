@@ -3,5 +3,12 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .venv/
+venv/
 env/
 .DS_Store
+
+# generated collection + analysis artifacts (regenerable; not source)
+commitment/outputs/traces/*.jsonl
+commitment/outputs/activations/*.npz
+commitment/outputs/figures/
+commitment/outputs/*_report.json

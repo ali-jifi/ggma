@@ -172,13 +172,13 @@ def smoke() -> dict:
     import sys
 
     sys.path.insert(0, LIB_REMOTE)
+    import steering_primitives  # noqa: F401
     import torch
+    import trace_export  # noqa: F401
     import transformers
+    from harmbench_judge import LLAMA2_CLS_PROMPT
 
     import harness  # noqa: F401
-    import steering_primitives  # noqa: F401
-    import trace_export  # noqa: F401
-    from harmbench_judge import LLAMA2_CLS_PROMPT
 
     assert "{behavior}" in LLAMA2_CLS_PROMPT["prompt"] and "{generation}" in LLAMA2_CLS_PROMPT["prompt"]
 
@@ -224,8 +224,8 @@ def _load_or_extract_direction(model, tokenizer):
     Returns (direction_tensor, source_str)."""
     import os
 
-    import torch
     import steering_primitives as sp
+    import torch
 
     dpath = f"{DIRECTION_REMOTE}/direction.pt"
     if os.path.exists(dpath):
@@ -276,11 +276,11 @@ def generate(dataset: list, max_new_tokens: int = MAX_NEW_TOKENS,
     import sys
 
     sys.path.insert(0, LIB_REMOTE)
+    import steering_primitives as sp
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     import harness
-    import steering_primitives as sp
 
     print(subprocess.run(["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader"],
                          capture_output=True, text=True).stdout.strip())
@@ -364,10 +364,9 @@ def judge(completions_by_label: dict, batch_size: int = 8) -> dict:
     import sys
 
     sys.path.insert(0, LIB_REMOTE)
+    import harmbench_judge as hj
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
-
-    import harmbench_judge as hj
 
     print(subprocess.run(["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader"],
                          capture_output=True, text=True).stdout.strip())

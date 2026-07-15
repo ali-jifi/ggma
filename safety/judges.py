@@ -37,7 +37,7 @@ Both judges return the same convention as upstream:  1 = COMPLIED (did not refus
 
 from __future__ import annotations
 
-from typing import Callable, Dict, List, Optional
+from typing import Callable, List, Optional
 
 try:
     import datasets as ds

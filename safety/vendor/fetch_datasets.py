@@ -294,7 +294,7 @@ def fetch_sorrybench():
             )
         raise
 
-    rows = [json.loads(l) for l in raw.decode("utf-8").splitlines() if l.strip()]
+    rows = [json.loads(line) for line in raw.decode("utf-8").splitlines() if line.strip()]
     base = [r for r in rows if r.get("prompt_style") == "base"]
     assert base, "no rows with prompt_style == 'base' — wrong file? (question_question.jsonl is a mutation)"
     assert len(base) == len(rows), f"expected only base rows in question.jsonl, got {len(base)}/{len(rows)}"
@@ -367,9 +367,11 @@ def check():
     for name, meta in want["files"].items():
         got = have["files"].get(name)
         if got is None:
-            print(f"  MISSING  {name}"); ok = False
+            print(f"  MISSING  {name}")
+            ok = False
         elif got["md5"] != meta["md5"]:
-            print(f"  CHANGED  {name} (rows {meta['rows']} -> {got['rows']})"); ok = False
+            print(f"  CHANGED  {name} (rows {meta['rows']} -> {got['rows']})")
+            ok = False
         else:
             print(f"  ok       {name}  ({meta['rows']} rows)")
     print("data matches the manifest" if ok else "data does NOT match the manifest")

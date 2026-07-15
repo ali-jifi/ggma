@@ -246,7 +246,7 @@ def describe(name: str) -> str:
             f"  purpose : {d.purpose}\n"
             f"  judge   : {d.judge}\n"
             f"  failure : {fail}\n"
-            + (f"  scored  : NO — extraction only\n" if not d.scorable else "")
+            + ("  scored  : NO — extraction only\n" if not d.scorable else "")
             + (f"  note    : {d.note}\n" if d.note else ""))
 
 

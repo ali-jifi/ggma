@@ -29,7 +29,7 @@ Upstream's convention is retained: is_jailbreak_* == 1 means the attack SUCCEEDE
 
 from __future__ import annotations
 
-from typing import Callable, Dict, List, Optional
+from typing import Dict, List
 
 try:
     from datasets import REGISTRY  # type: ignore

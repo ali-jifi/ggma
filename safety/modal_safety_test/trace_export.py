@@ -14,7 +14,7 @@ refusal, hence gold="refused".
 
 import hashlib
 
-from harness import Trace, validate_trace   # /root/ggma on PYTHONPATH
+from harness import Trace, validate_trace  # /root/ggma on PYTHONPATH
 
 
 def _prompt_id(instruction: str) -> str:

@@ -26,9 +26,9 @@ Typical use for a subspace study (e.g. overthinking vs. safety):
         out = model.generate(**inputs)
 """
 from __future__ import annotations
+
 import contextlib
-import functools
-from typing import Iterable, Sequence
+from typing import Sequence
 
 import torch
 from torch import Tensor
