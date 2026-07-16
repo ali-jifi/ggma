@@ -89,12 +89,16 @@ def main():
         if _cuda:
             torch.cuda.empty_cache()
         if tr.rollout_outcomes:
-            rep = curve_report(tr.rollout_outcomes)
+            rep = curve_report(tr.rollout_outcomes, tr.rollout_closure_rates,
+                               n_rollouts=args.rollouts)
             reports.append(rep)
             committed += 1
+            cl = rep["closure"]
+            flag = " CAP-CONFOUNDED" if cl and cl["confounded"] else ""
             print(f"[{i+1}/{len(prompts)}] {p['prompt_id']} outcome={tr.outcome} "
                   f"curve={[round(x,2) for x in tr.rollout_outcomes]} "
-                  f"onset={rep['onset_index']} shape={rep['shape']}")
+                  f"closure={[round(x,2) for x in tr.rollout_closure_rates]} "
+                  f"onset={rep['onset_index']} shape={rep['shape']}{flag}")
         else:
             uncommitted += 1
             print(f"[{i+1}/{len(prompts)}] {p['prompt_id']} outcome={tr.outcome} "

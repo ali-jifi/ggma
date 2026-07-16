@@ -26,5 +26,11 @@ def load_model(model_name, dtype="bfloat16", device_map="auto",
         "model": model_name,
         "model_revision": revision or getattr(model.config, "_commit_hash", "") or "",
         "chat_template_version": chat_template_hash(tok),
+        # v0.3: recorded per row -- both change the numbers a run produces.
+        # Read back from the loaded model, not the args, so the row reflects
+        # what actually got used if transformers silently substitutes.
+        "dtype": str(getattr(model, "dtype", torch_dtype)).replace("torch.", ""),
+        "attn_implementation": getattr(model.config, "_attn_implementation",
+                                       attn_implementation),
     }
     return model, tok, meta
