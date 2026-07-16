@@ -9,7 +9,7 @@ Math:
 Safety (matcher swap only, R4 -- same truncation/sampling/curve machinery):
   python commitment/scripts/run_traces.py --domain safety --model <id> \
       --harmbench commitment/data/harmbench.csv --induction hijack_preamble \
-      --preamble-id <stem> --classifier gordon_refusal:classify \
+      --preamble-id <stem> --classifier refusal_classifier:classify \
       --budgets natural 512 4096 --samples 8 --n 50 --layer2
 
 --samples is resamples per (prompt,budget) CELL; cell-level flip stats and the
@@ -35,7 +35,7 @@ def build_matcher(args):
     from matchers.refusal_matcher import RefusalMatcher, load_classifier
     if not args.classifier:
         raise SystemExit("safety domain needs --classifier module:callable "
-                         "(Gordon's refusal classifier)")
+                         "(the refusal classifier)")
     clf = load_classifier(args.classifier)
     return RefusalMatcher(clf, version=args.classifier_version)
 
