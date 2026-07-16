@@ -17,18 +17,25 @@ python safety/smoke_datasets.py                   # data-level smoke check, no m
 | **HarmBench** | harmful | primary | The scored harmful set, paired with its own official classifier. | HarmBench classifier | complying (**ASR**) |
 | **SORRY-Bench** | harmful | generality | Taxonomically distinct second harmful set, so the generality claim isn't tied to one prompt family. | HarmBench classifier (same as primary, so a difference reflects the prompts, not the judge) | complying (**ASR**) |
 | **AdvBench** | harmful | comparability | **Extraction only.** Ties to the refusal-direction literature. | — never scored | n/a |
-| **Alpaca** | benign | comparability | **Extraction only here** — the harmless pole of the Arditi refusal-direction replication. | — never scored | n/a |
-| ~~**XSTest**~~ | benign | primary | Over-refusal probe. | **NOT BUILT** | refusing (**FRR**) |
-| ~~**OR-Bench**~~ | benign | scale | Larger benign pool for a stable false-refusal rate. | **NOT BUILT** | refusing (**FRR**) |
+| **XSTest** | benign | primary | Over-refusal probe: benign prompts that superficially look unsafe. SAFE half only (250 of 450). | refusal detector | refusing (**FRR**) |
+| **Alpaca** | benign | control | Competence control (test half). **Dual role**: the extract half also feeds the Arditi refusal-direction replication. | refusal detector (test half) | refusing (**FRR**) |
+| **OR-Bench** | benign | scale | Larger benign pool for a stable false-refusal rate. | refusal detector | refusing (**FRR**) |
 
-## Benign controls: not built
+## Benign controls: built (data layer)
 
-**The benign-control arm is deliberately absent — it is a separate deliverable.** The
-proposal's Table 3 lists three benign controls (XSTest / Alpaca / OR-Bench) for measuring
-the false-refusal rate. None of that is implemented here. Alpaca is fetched anyway because
-**Control 4 needs its extract half now**; do not read its presence as the benign arm being
-half-done. `datasets.py` marks it `scorable=False` so `metrics.score("alpaca", ...)` raises
-rather than half-implementing the role.
+**The benign-control datasets are built.** XSTest and OR-Bench fetch, split, and register
+as `BENIGN_CONTROL` scored with the refusal detector; Alpaca is a benign control whose
+**extract half additionally** feeds Control 4's static refusal direction in `app.py` (the
+two halves are disjoint — `app.py` reads the extract half by filename, so scoring the test
+half cannot disturb the direction extraction).
+
+**What is still NOT built** is the *matched benign run*, not the data. The proposal holds
+benign prompts "length- and style-matched to the harmful set", so a benign run is
+downstream of a **frozen harmful config** (preamble / budget / style). `datasets.sample()`
+stratifies by category only and has **no length/style matching** — that matching is
+required before a benign false-refusal number can be compared to a harmful ASR run, and it
+cannot be built until the harmful config it must mirror is frozen (Phase 3 steering). The
+data built here is the prerequisite for that run.
 
 `metrics.specificity_report()` raises if either arm is missing, rather than averaging an
 empty benign list into a flattering `0.0`.

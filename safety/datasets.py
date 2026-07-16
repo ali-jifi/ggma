@@ -99,27 +99,58 @@ REGISTRY: Dict[str, Dataset] = {
              "heavily with HarmBench, so string-match ASR on it is inflated and the two are "
              "not independent samples.",
     ),
-    "alpaca": Dataset(
-        name="alpaca",
-        role=EXTRACTION_ONLY,
+    "xstest": Dataset(
+        name="xstest",
+        role=BENIGN_CONTROL,
         harmful=False,
         judge=JUDGE_REFUSAL,
-        tier="comparability",
-        purpose="The harmless pole of the harmful-vs-harmless diff-in-means in "
-                "app.py::_load_or_extract_direction — i.e. the refusal-direction (Arditi) "
-                "replication. Read at extraction time, never scored.",
-        scorable=False,
-        note="CC BY-NC 4.0 — non-commercial. EXTRACTION ONLY in this tree. Alpaca is also one of "
-             "the proposal's three benign controls (XSTest / Alpaca / OR-Bench), but that arm is "
-             "not built here — see 'Benign controls: not built' in DATASET_SOURCES.md, so score() "
-             "refuses it rather than half-implementing the role. The direction this half helps "
-             "build is the same KIND of vector Control 4 will need later, but no control exists "
-             "yet — Control 4 is a comparison against a cross-domain transfer, and that is "
-             "Stage 5. Do not read this entry as a control arm.",
+        tier="primary",
+        purpose="Primary over-refusal probe: benign prompts that superficially resemble unsafe "
+                "ones — the hardest false-refusal case.",
+        note="SAFE half only (250 of 450). The 200 'contrast' rows are genuinely unsafe and are "
+             "excluded at fetch time by label == 'safe'. Do NOT filter on the 'contrast' suffix — "
+             "the contrast TYPES are prefixed (contrast_homonyms, …), so a suffix test no-ops and "
+             "silently keeps all 450. See DATASET_SOURCES.md.",
+    ),
+    "alpaca": Dataset(
+        name="alpaca",
+        role=BENIGN_CONTROL,
+        harmful=False,
+        judge=JUDGE_REFUSAL,
+        tier="control",
+        purpose="Benign-competence control: ordinary instructions, as used by the "
+                "refusal-direction paper. The TEST half is scored (false-refusal rate).",
+        note="CC BY-NC 4.0 — non-commercial. DUAL ROLE, do not conflate the halves: the TEST half "
+             "is this benign-competence control; the EXTRACT half ALSO feeds the harmful-vs-harmless "
+             "diff-in-means in app.py::_load_or_extract_direction — the static Arditi refusal "
+             "direction, which is Stage 1 today and the same KIND of vector Control 4 will later "
+             "need. That direction is NOT the drift subspace (built later from within-trace "
+             "refuse-early vs comply-late contrasts); mistaking it for the drift subspace inverts "
+             "the design. app.py reads the extract half by filename, not via this registry, so "
+             "scoring the test half here cannot disturb the direction extraction.",
+    ),
+    "orbench": Dataset(
+        name="orbench",
+        role=BENIGN_CONTROL,
+        harmful=False,
+        judge=JUDGE_REFUSAL,
+        tier="scale",
+        purpose="Larger benign pool for a stable false-refusal rate.",
+        note="or-bench-toxic is NOT benign and is never fetched. The category column is "
+             "identical across benign and toxic files, so toxic exclusion is file-level only. "
+             "'orbench_hard' is the hard-1k subset most models over-refuse. `category == 'harmful'` "
+             "rows inside the benign files ARE benign — it is a category name, not a toxicity flag.",
+    ),
+    "orbench_hard": Dataset(
+        name="orbench_hard",
+        role=BENIGN_CONTROL,
+        harmful=False,
+        judge=JUDGE_REFUSAL,
+        tier="scale",
+        purpose="OR-Bench hard-1k: the benign prompts models most often wrongly refuse.",
+        note="1319 rows despite the '1k' name.",
     ),
 }
-# NOTE: the benign-control arm (XSTest / Alpaca-as-control / OR-Bench) is deliberately absent.
-# See "Benign controls: not built" in vendor/DATASET_SOURCES.md.
 
 SPLITS = ("extract", "test", "all")
 
