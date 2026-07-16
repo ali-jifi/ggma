@@ -190,17 +190,53 @@ approximation is unusable and 0/12 would otherwise report ±0.00.
 The mechanistic metrics (commitment strength + decay curves, subspace overlap via principal
 angles, transfer magnitude, bidirectional transfer) are Phase 2+ and out of Task 1.2 scope.
 
-## Known gap: the extraction method is not yet the proposal's
+## Two different directions — do not conflate them
 
-`app.py::_load_or_extract_direction` computes a harmful-vs-harmless difference-in-means —
-**the refusal-direction method**. The proposal specifies something different: because the
-drift contrast is within-trace (refuse-early versus comply-late), the safety drift subspace
-is extracted from **within-trace contrasts**, and harmless prompts **no longer feed
-extraction** — they serve as specificity controls.
+`app.py::_load_or_extract_direction` computes a harmful-vs-harmless difference-in-means.
+That is **Control 4 — the static Arditi refusal direction**, and it is *required*, not a
+deviation. `MASTER_TEAM_HANDOFF.md:259`:
 
-So Alpaca is currently read as an extraction input while the proposal's design makes it a
-control. That is a method gap, not a data problem, and it is why AdvBench is still wired to
-the extraction side.
+> **Control 4 — Static refusal direction** ... build the static Arditi-style refusal
+> direction: difference-of-means between ~30 harmful and ~30 harmless prompt activations
+> at the last prompt token ... Your math→safety transfer only counts if it beats/differs
+> from this.
+
+The **drift subspace** is a different object entirely, built later from **within-trace
+contrasts** (refuse-early versus comply-late). For *that* one the proposal says harmless
+prompts "no longer feed extraction; they serve as specificity controls."
+
+| | static refusal direction | safety-drift subspace |
+|---|---|---|
+| built from | harmful vs harmless **prompts** | refuse-early vs comply-late **within one trace** |
+| Alpaca's role | the harmless pole (extract half) | none — benign is a control only |
+| purpose | Control 4: "you just found the known refusal knob" | the hypothesis under test |
+| status | ✅ what `app.py` builds today | Phase 3, not yet built |
+
+`handoff:260` makes the relationship explicit: Gordon must *"prove your safety-drift
+direction is geometrically distinct from this static refusal direction"* (More to Refusal
+reports cosine ≈ 0.10). **The risk here is labelling, not method:** if the static refusal
+direction is ever mistaken for the drift subspace, the design is inverted and the control
+becomes the claim.
+
+## Ordering: harmful first, benign after — and that is the required order
+
+The proposal (p.10): *"Steering the safety subspace must not raise refusals on these benign
+sets; **benign prompts are held length- and style-matched to the harmful set**."*
+
+So the benign run is **downstream** of the harmful one: it must mirror whatever preamble,
+budget and style the harmful run froze. You cannot run XSTest later at default settings and
+compare it to a hijack-preamble harmful run.
+
+Scores do not interact — `metrics.score()` is pure per-dataset, and sampling is
+seeded per dataset, so a harmful ASR measured today is final and benign data collected later
+will not revise it. What the split defers is not the number but the **claim**: false-refusal
+only becomes load-bearing once there is an intervention to be specific *about* (Phase 3
+steering). `specificity_report()` raises if either arm is missing rather than averaging an
+empty list into a flattering `0.0`.
+
+**Known gap:** `datasets.sample()` stratifies by category only — it has **no length/style
+matching**. That matching is required before the benign controls can be compared to a
+harmful run, and it is unbuilt.
 
 ## Licensing
 

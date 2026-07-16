@@ -118,8 +118,10 @@ REGISTRY: Dict[str, Dataset] = {
         tier="control",
         purpose="Benign-competence control: ordinary instructions, as used by the "
                 "refusal-direction paper.",
-        note="CC BY-NC 4.0 — non-commercial. Currently ALSO read by the extraction step, which "
-             "the proposal's own design does not want; see DATASET_SOURCES.md.",
+        note="CC BY-NC 4.0 — non-commercial. Its extract half ALSO feeds the harmful-vs-harmless "
+             "diff-in-means in app.py — that is Control 4 (the static Arditi refusal direction), "
+             "NOT the drift subspace, which the proposal builds from within-trace contrasts. Both "
+             "are wanted; do not conflate them. See DATASET_SOURCES.md.",
     ),
     "orbench": Dataset(
         name="orbench",

@@ -63,9 +63,9 @@ PINS = {
     "harmbench": "8e1604d1171fe8a48d8febecd22f600e462bdcdd",
     "advbench": "098262edf85f807224e70ecd87b9d83716bf6b73",
     "alpaca": "761dc5bfbdeeffa89b8bff5d038781a4055f796a",
-    "xstest": "main",       # paul-rottger/xstest; resolved to a sha at fetch time
+    "xstest": "d7bb5bd738c1fcbc36edd83d5e7d1b71a3e2d84d",
     "orbench": "e36d8b80e81837c8a8f264bbb2a49f1b32c7e272",
-    "sorrybench": "main",   # gated; resolved at fetch time
+    "sorrybench": "612a4e1f45db8adf884fa62318ddf9fa1c6e75e9",
 }
 
 SPLIT_SEED = 42          # extraction/test split; changing it changes every reported number
@@ -205,9 +205,17 @@ def fetch_alpaca():
     """Benign-competence control. CC BY-NC 4.0 — non-commercial.
 
     The `input == ""` subset is what the refusal-direction literature uses as its harmless
-    contrast, so results stay comparable. Under the proposal's design benign prompts are a
-    specificity control and do NOT feed extraction — but the current extraction step still
-    implements harmful-vs-harmless diff-in-means and reads this. That is the method gap.
+    contrast, so results stay comparable.
+
+    Two roles, deliberately, and they must not be conflated:
+      * the TEST half is the benign-competence control (specificity, never extraction);
+      * the EXTRACT half feeds app.py's harmful-vs-harmless diff-in-means, which builds
+        **Control 4 — the static Arditi refusal direction** ("difference-of-means between
+        ~30 harmful and ~30 harmless prompt activations at the last prompt token"). That
+        is a required control arm, not a deviation.
+    The DRIFT subspace is a different object, built later from within-trace contrasts
+    (refuse-early vs comply-late); harmless prompts do not feed that one. If the static
+    refusal direction is ever mistaken for the drift subspace, the design is inverted.
     """
     raw = _get(f"https://raw.githubusercontent.com/tatsu-lab/stanford_alpaca/{PINS['alpaca']}/alpaca_data.json")
     data = json.loads(raw.decode("utf-8"))

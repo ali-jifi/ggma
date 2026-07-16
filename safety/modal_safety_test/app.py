@@ -41,7 +41,6 @@ STEERING_PY = SAFETY_DIR / "steering_primitives.py"
 JUDGE_PY = SAFETY_DIR / "vendor" / "harmbench_judge.py"
 TRACE_EXPORT_PY = MODAL_DIR / "trace_export.py"
 DATA_LOCAL = SAFETY_DIR / "vendor" / "data"            # built by vendor/fetch_datasets.py; git-ignored
-HARMBENCH_TEST_JSON = DATA_LOCAL / "harmbench_test.json"
 REQS = SAFETY_DIR / "vendor" / "requirements-modal.txt"
 SCRATCH_DIR = REPO_ROOT / "do_not_track" / "modal"     # local, git-ignored outputs
 
@@ -103,14 +102,20 @@ image = (
 )
 
 
+# The three files this eval reads, named ONCE. vendor/fetch_datasets.py owns these
+# names; every reference below derives from these constants so a rename on the fetcher
+# side can only ever produce a loud preflight failure, never a silent divergence.
+SCORED_JSON = "harmbench_test.json"          # the scored set (HarmBench standard, test half)
+HARMFUL_EXTRACT_JSON = "advbench_extract.json"   # extraction side, harmful pole
+BENIGN_EXTRACT_JSON = "alpaca_extract.json"      # extraction side, benign pole
+REQUIRED_DATA = (SCORED_JSON, HARMFUL_EXTRACT_JSON, BENIGN_EXTRACT_JSON)
+
+
 def _require_data():
     """The datasets are not committed — they are fetched from their canonical upstreams
     at pinned commits. Fail here with an instruction rather than deep inside a container
     with a FileNotFoundError."""
-    missing = [
-        n for n in ("harmbench_test.json", "advbench_extract.json", "alpaca_benign_extract.json")
-        if not (DATA_LOCAL / n).exists()
-    ]
+    missing = [n for n in REQUIRED_DATA if not (DATA_LOCAL / n).exists()]
     if missing:
         raise SystemExit(
             f"Missing dataset(s) in {DATA_LOCAL}: {', '.join(missing)}\n"
@@ -182,11 +187,11 @@ def smoke() -> dict:
 
     assert "{behavior}" in LLAMA2_CLS_PROMPT["prompt"] and "{generation}" in LLAMA2_CLS_PROMPT["prompt"]
 
-    splits = sorted(glob.glob(f"{DATA_REMOTE}/*.json"))
-    assert any("advbench_extract" in s for s in splits), f"advbench_extract missing: {splits}"
-    assert any("alpaca_benign_extract" in s for s in splits), f"alpaca_benign_extract missing: {splits}"
-    n_harmful = len(json.load(open(f"{DATA_REMOTE}/advbench_extract.json")))
-    n_harmless = len(json.load(open(f"{DATA_REMOTE}/alpaca_benign_extract.json")))
+    shipped = {s.rsplit("/", 1)[-1] for s in glob.glob(f"{DATA_REMOTE}/*.json")}
+    for want in REQUIRED_DATA:
+        assert want in shipped, f"{want} missing from the image; shipped: {sorted(shipped)}"
+    n_harmful = len(json.load(open(f"{DATA_REMOTE}/{HARMFUL_EXTRACT_JSON}")))
+    n_harmless = len(json.load(open(f"{DATA_REMOTE}/{BENIGN_EXTRACT_JSON}")))
 
     hf_user = None
     token = os.environ.get("HF_TOKEN")
@@ -234,8 +239,8 @@ def _load_or_extract_direction(model, tokenizer):
     # AdvBench is the extraction-side harmful set (proposal: extraction only, never
     # scored). Alpaca is the benign contrast. Both are extraction halves, disjoint from
     # anything scored.
-    harmful = [r["instruction"] for r in json.load(open(f"{DATA_REMOTE}/advbench_extract.json"))]
-    harmless = [r["instruction"] for r in json.load(open(f"{DATA_REMOTE}/alpaca_benign_extract.json"))]
+    harmful = [r["instruction"] for r in json.load(open(f"{DATA_REMOTE}/{HARMFUL_EXTRACT_JSON}"))]
+    harmless = [r["instruction"] for r in json.load(open(f"{DATA_REMOTE}/{BENIGN_EXTRACT_JSON}"))]
     rng = random.Random(GEN_SEED)
     harmful = rng.sample(harmful, min(N_EXTRACT, len(harmful)))
     harmless = rng.sample(harmless, min(N_EXTRACT, len(harmless)))
@@ -447,7 +452,7 @@ def main(seed: int = 42, n_per_category: int = 2, batch_size: int = 8,
     from report import render_markdown, render_scores
 
     _require_data()
-    dataset = json.loads(HARMBENCH_TEST_JSON.read_text())
+    dataset = json.loads((DATA_LOCAL / SCORED_JSON).read_text())
     sample = stratified_sample(dataset, n_per_category=n_per_category, seed=seed)
     n_cats = len({r["category"] for r in sample})
     print(f"Sampled {len(sample)} prompts ({n_per_category}/category x {n_cats} categories, seed={seed}).")

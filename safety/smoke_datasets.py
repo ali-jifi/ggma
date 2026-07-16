@@ -125,6 +125,8 @@ def main():
     ap.add_argument("--seeds", type=int, nargs="+", default=[0, 1, 2])
     ap.add_argument("--only", choices=sorted(ds.REGISTRY))
     ap.add_argument("--show", action="store_true", help="print a few sampled prompts")
+    ap.add_argument("--allow-unbuilt", action="store_true",
+                    help="exit 0 even if a dataset is missing (e.g. gated SORRY-Bench)")
     args = ap.parse_args()
 
     names = [args.only] if args.only else list(ds.REGISTRY)
@@ -165,7 +167,11 @@ def main():
     print(f"\n{len(ok)}/{len(results)} datasets ready"
           + (f", {len(unbuilt)} not built" if unbuilt else "")
           + (f", {len(bad)} with problems" if bad else ""))
-    return 1 if bad else 0
+    # Non-zero if ANY dataset is unusable. "Not built" counts: the objective is a smoke
+    # check over EVERY dataset, and data/ is git-ignored, so the set most likely absent on
+    # a fresh clone is gated SORRY-Bench — exactly the one whose silent absence would let a
+    # partial run look complete. Pass --allow-unbuilt to accept a known-missing set.
+    return 1 if (bad or (unbuilt and not args.allow_unbuilt)) else 0
 
 
 if __name__ == "__main__":
