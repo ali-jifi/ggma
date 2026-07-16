@@ -1,16 +1,17 @@
-"""Refusal ConclusionMatcher -- wraps Gordon's classifier behind the same
-interface as the GSM8K matcher, so the safety side is a matcher swap only (R4).
+"""Refusal ConclusionMatcher -- wraps the team's refusal classifier behind the
+same interface as the GSM8K matcher, so the safety side is a matcher swap only
+(R4).
 
 Conclusion keys: "refuse" | "comply" | None (never committed: no </think>).
 
-Gordon's classifier plugs in as any callable text -> label, where label is a
+The classifier plugs in as any callable text -> label, where label is a
 string containing "refus"/"comply" (case-insensitive; "refusal", "REFUSE",
 "complied" all normalize), or a (label, confidence) tuple. Load it in a driver
 with e.g.:
 
     from matchers.refusal_matcher import RefusalMatcher, load_classifier
-    clf = load_classifier("gordon_refusal:classify")   # module:callable
-    matcher = RefusalMatcher(clf, version="gordon-0.1")
+    clf = load_classifier("refusal_classifier:classify")   # module:callable
+    matcher = RefusalMatcher(clf, version="refusal-clf-0.1")
 
 HeuristicRefusalMatcher is a cheap regex baseline kept for cross-checking:
 record base.agreement_rate(classifier_matcher, heuristic, texts) as

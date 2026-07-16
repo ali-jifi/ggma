@@ -56,7 +56,7 @@ commitment/
   matchers/
     base.py                       ConclusionMatcher interface: match(text) -> conclusion_key | None
     gsm8k_matcher.py              numeric extractor (math side)
-    refusal_matcher.py            wraps Gordon's refusal classifier (safety); heuristic baseline
+    refusal_matcher.py            wraps the refusal classifier (safety); heuristic baseline
   data/
     common.py                     deterministic extraction|selection|heldout split
     load_gsm8k.py                 GSM8K load + \boxed prompt prep
@@ -194,16 +194,16 @@ python commitment/scripts/calibrate_layer2.py --traces commitment/outputs/traces
 ```
 
 **4. Safety = matcher swap only** (same machinery; needs a local HarmBench file
-and Gordon's classifier):
+and the refusal classifier):
 
 ```
 python commitment/scripts/run_traces.py --domain safety --model <hf_id> \
     --harmbench commitment/data/harmbench.csv --induction hijack_preamble \
-    --preamble-id <stem> --classifier gordon_refusal:classify \
+    --preamble-id <stem> --classifier refusal_classifier:classify \
     --budgets 512 4096 --samples 8 --n 50 --layer2
 ```
 
-`--classifier module:callable` resolves Gordon's classifier behind the same
+`--classifier module:callable` resolves the refusal classifier behind the same
 `match()` signature.
 
 **5. Analysis** (reads `commitment/outputs/` only, never re-runs a model):
@@ -259,8 +259,8 @@ A teammate reproduces the commitment-layer results by following
 - `harness.py` + the Trace schema are the **frozen contract** both sides build
   against, do not edit without sign-off. Everything else iterates.
 - The **safety side** additionally needs a local HarmBench file (`--harmbench`)
-  and Gordon's classifier (`--classifier`); neither is required to replicate the
-  commitment layers.
+  and the refusal classifier (`--classifier`); neither is required to replicate
+  the commitment layers.
 - `.venv/` and `commitment/outputs/*.jsonl|*.npz` are gitignored, the teammate
   regenerates traces, they don't pull yours.
 
