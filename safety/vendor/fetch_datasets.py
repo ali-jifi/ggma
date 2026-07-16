@@ -20,26 +20,27 @@ ROLES (research proposal, Table 3):
                  and never scored with string-match metrics: it overlaps heavily with
                  HarmBench, so string-match ASR on it is inflated.
 
-  BENIGN — specificity controls, NOT extraction
-    xstest       PRIMARY over-refusal probe. Benign prompts that superficially look
-                 unsafe — the hardest false-refusal case.
-    alpaca       Benign-competence control. Ordinary instructions.
-    orbench      SCALE. Large benign pool for a stable false-refusal rate.
+  BENIGN — extraction only (Control 4)
+    alpaca       The harmless pole of the static Arditi refusal direction.
 
-  Benign sets do not change any ASR number. They measure whether an intervention was
-  specific: if ablating a direction raises ASR but also destroys benign behaviour, the
-  model was lobotomised rather than steered. They are scored with a REFUSAL detector,
-  never with the HarmBench classifier (which asks "does this exhibit the harmful
-  behavior?" — meaningless for a benign prompt).
+NOT BUILT — the benign-control arm (XSTest / Alpaca-as-control / OR-Bench). The
+proposal's Table 3 lists three benign controls for measuring the false-refusal rate;
+none of that is implemented here, deliberately, and it is a separate deliverable. See
+"Benign controls: not built" in DATASET_SOURCES.md before adding them — the two
+non-obvious constraints are that XSTest ships 200 genuinely-unsafe contrast prompts in
+the same file as its 250 safe ones, and that OR-Bench's category column is identical
+across its benign and toxic files, so toxic exclusion has to happen at the file level.
+
+Alpaca is fetched because Control 4 needs it NOW, not as a benign control. Do not read
+its presence as the benign arm being half-done.
 
 Every dataset is split into a disjoint extraction half and a held-out test half
 (Task 1.5), so no prompt used to build a subspace is ever scored with it.
 
 Usage:
-    python fetch_datasets.py                 # fetch + split everything available
-    python fetch_datasets.py --only xstest   # one dataset
-    python fetch_datasets.py --check         # verify ./data against MANIFEST.json
-    python fetch_datasets.py --smoke         # print the smoke batches (see smoke_datasets.py)
+    python fetch_datasets.py                    # fetch + split everything available
+    python fetch_datasets.py --only harmbench   # one dataset
+    python fetch_datasets.py --check            # verify ./data against MANIFEST.json
 """
 
 import argparse
@@ -63,14 +64,11 @@ PINS = {
     "harmbench": "8e1604d1171fe8a48d8febecd22f600e462bdcdd",
     "advbench": "098262edf85f807224e70ecd87b9d83716bf6b73",
     "alpaca": "761dc5bfbdeeffa89b8bff5d038781a4055f796a",
-    "xstest": "d7bb5bd738c1fcbc36edd83d5e7d1b71a3e2d84d",
-    "orbench": "e36d8b80e81837c8a8f264bbb2a49f1b32c7e272",
     "sorrybench": "612a4e1f45db8adf884fa62318ddf9fa1c6e75e9",
 }
 
 SPLIT_SEED = 42          # extraction/test split; changing it changes every reported number
 N_BENIGN_ALPACA = 2000   # Alpaca rows kept; the full 52k is far more than a control needs
-N_ORBENCH = 4000         # sampled from 80k; stratified by category
 
 
 # --- http --------------------------------------------------------------------
@@ -175,47 +173,28 @@ def fetch_advbench():
     print(f"  advbench: {len(out)} rows -> extract {len(extract)} (extraction-side only)")
 
 
-def fetch_xstest():
-    """PRIMARY over-refusal probe — the SAFE half only.
-
-    XSTest ships 450 rows: 250 safe + 200 unsafe *contrast* prompts, in one file. Only the
-    safe ones are a benign control; admitting the contrast rows would poison it with
-    genuinely harmful prompts and silently wreck the false-refusal denominator.
-
-    The filter is `label == "safe"`. Do NOT filter on type.endswith("_contrast") — the
-    contrast types are PREFIXED (contrast_homonyms, contrast_privacy, ...), so a suffix
-    test matches nothing and keeps all 450 rows while looking correct.
-    """
-    raw = _get(f"https://raw.githubusercontent.com/paul-rottger/xstest/{PINS['xstest']}/xstest_prompts.csv")
-    rows = list(csv.DictReader(io.StringIO(raw.decode("utf-8"))))
-    assert len(rows) == 450, f"expected 450 XSTest rows, got {len(rows)}"
-
-    safe = [r for r in rows if r["label"] == "safe"]
-    assert len(safe) == 250, f"expected 250 safe XSTest prompts, got {len(safe)}"
-    assert not any(r["type"].startswith("contrast_") for r in safe), "unsafe prompt leaked into the benign set"
-
-    out = [{"instruction": r["prompt"], "category": r["type"], "focus": r["focus"], "xstest_id": r["id"]}
-           for r in safe]
-    extract, test = _emit("xstest", out)
-    print(f"  xstest: 450 rows -> {len(out)} SAFE ({len(rows) - len(safe)} unsafe contrast rows excluded) "
-          f"= extract {len(extract)} + test {len(test)}")
-
 
 def fetch_alpaca():
-    """Benign-competence control. CC BY-NC 4.0 — non-commercial.
+    """The harmless pole of the Arditi replication — EXTRACTION ONLY. CC BY-NC 4.0.
 
-    The `input == ""` subset is what the refusal-direction literature uses as its harmless
-    contrast, so results stay comparable.
+    The EXTRACT half feeds app.py's harmful-vs-harmless diff-in-means at the last prompt
+    token: the refusal-direction method from Arditi et al., which app.py then ablates.
+    The `input == ""` subset is what that literature uses, so results stay comparable.
 
-    Two roles, deliberately, and they must not be conflated:
-      * the TEST half is the benign-competence control (specificity, never extraction);
-      * the EXTRACT half feeds app.py's harmful-vs-harmless diff-in-means, which builds
-        **Control 4 — the static Arditi refusal direction** ("difference-of-means between
-        ~30 harmful and ~30 harmless prompt activations at the last prompt token"). That
-        is a required control arm, not a deviation.
-    The DRIFT subspace is a different object, built later from within-trace contrasts
-    (refuse-early vs comply-late); harmless prompts do not feed that one. If the static
-    refusal direction is ever mistaken for the drift subspace, the design is inverted.
+    Three things this is NOT — the labels here are easy to inflate:
+      * NOT the benign-control arm. Alpaca is one of the proposal's three benign controls
+        (XSTest / Alpaca / OR-Bench), but that arm is unbuilt; the test half is emitted and
+        nothing scores it. datasets.py marks alpaca scorable=False.
+      * NOT the drift subspace. That is a different object, built later from within-trace
+        contrasts (refuse-early vs comply-late); harmless prompts do not feed it. Mistaking
+        this direction for the drift subspace would invert the design.
+      * NOT Control 4, though the arithmetic matches its recipe ("difference-of-means
+        between ~30 harmful and ~30 harmless prompt activations at the last prompt token",
+        MASTER_TEAM_HANDOFF.md:259). Control 4 is a *comparison* — "your math->safety
+        transfer only counts if it beats/differs from this" — and there is no transfer to
+        compare against yet. The suite is Stage 5; this is Stage 1. What is true: the
+        vector produced here is the same KIND Control 4 will need, which is why it is worth
+        keeping, and why deleting Alpaca breaks app.py today.
     """
     raw = _get(f"https://raw.githubusercontent.com/tatsu-lab/stanford_alpaca/{PINS['alpaca']}/alpaca_data.json")
     data = json.loads(raw.decode("utf-8"))
@@ -227,40 +206,6 @@ def fetch_alpaca():
     print(f"  alpaca: {len(no_input)} no-input rows -> sampled {len(out)} "
           f"= extract {len(extract)} + test {len(test)}")
 
-
-def fetch_orbench():
-    """Benign at SCALE, for a stable false-refusal rate.
-
-    TRAP: or-bench-toxic.csv sits in the same repo and shares the SAME 10 category values
-    as the benign files. The `category` column does NOT distinguish benign from toxic, so
-    excluding toxic by category silently fails. Exclusion is FILE-LEVEL: we simply never
-    request or-bench-toxic.csv.
-
-    Names lie about size: or-bench-hard-1k.csv is 1319 rows, or-bench-80k.csv is 80359.
-    """
-    base = f"https://huggingface.co/datasets/bench-llm/or-bench/resolve/{PINS['orbench']}/"
-    hard = list(csv.DictReader(io.StringIO(_get(base + "or-bench-hard-1k.csv").decode("utf-8"))))
-    assert len(hard) == 1319, f"expected 1319 or-bench-hard-1k rows, got {len(hard)}"
-    big = list(csv.DictReader(io.StringIO(_get(base + "or-bench-80k.csv").decode("utf-8"))))
-    assert len(big) == 80359, f"expected 80359 or-bench-80k rows, got {len(big)}"
-
-    hard_rows = [{"instruction": r["prompt"], "category": r["category"], "subset": "hard-1k"} for r in hard]
-    _emit("orbench_hard", hard_rows)
-
-    # Stratify the 80k subsample: hard-1k is 40% `illegal` while 80k is only ~12%, so an
-    # unstratified draw would not resemble it and the category mix alone would move the rate.
-    by_cat = {}
-    for r in big:
-        by_cat.setdefault(r["category"], []).append(r)
-    rng = random.Random(SPLIT_SEED)
-    per = max(1, N_ORBENCH // len(by_cat))
-    sample = []
-    for cat in sorted(by_cat):
-        sample += rng.sample(by_cat[cat], min(per, len(by_cat[cat])))
-    big_rows = [{"instruction": r["prompt"], "category": r["category"], "subset": "80k"} for r in sample]
-    extract, test = _emit("orbench", big_rows)
-    print(f"  orbench: hard-1k {len(hard_rows)} rows; 80k {len(big)} -> stratified sample {len(big_rows)} "
-          f"= extract {len(extract)} + test {len(test)}  (or-bench-toxic.csv never fetched)")
 
 
 def fetch_sorrybench():
@@ -344,9 +289,7 @@ FETCHERS = {
     "harmbench": fetch_harmbench,
     "advbench": fetch_advbench,
     "sorrybench": fetch_sorrybench,
-    "xstest": fetch_xstest,
     "alpaca": fetch_alpaca,
-    "orbench": fetch_orbench,
 }
 
 

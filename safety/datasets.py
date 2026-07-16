@@ -99,51 +99,27 @@ REGISTRY: Dict[str, Dataset] = {
              "heavily with HarmBench, so string-match ASR on it is inflated and the two are "
              "not independent samples.",
     ),
-    "xstest": Dataset(
-        name="xstest",
-        role=BENIGN_CONTROL,
-        harmful=False,
-        judge=JUDGE_REFUSAL,
-        tier="primary",
-        purpose="Primary over-refusal probe: benign prompts that superficially resemble unsafe "
-                "ones — the hardest false-refusal case.",
-        note="SAFE half only (250 of 450). The 200 'contrast' rows are genuinely unsafe and are "
-             "excluded at fetch time by label == 'safe'.",
-    ),
     "alpaca": Dataset(
         name="alpaca",
-        role=BENIGN_CONTROL,
+        role=EXTRACTION_ONLY,
         harmful=False,
         judge=JUDGE_REFUSAL,
-        tier="control",
-        purpose="Benign-competence control: ordinary instructions, as used by the "
-                "refusal-direction paper.",
-        note="CC BY-NC 4.0 — non-commercial. Its extract half ALSO feeds the harmful-vs-harmless "
-             "diff-in-means in app.py — that is Control 4 (the static Arditi refusal direction), "
-             "NOT the drift subspace, which the proposal builds from within-trace contrasts. Both "
-             "are wanted; do not conflate them. See DATASET_SOURCES.md.",
-    ),
-    "orbench": Dataset(
-        name="orbench",
-        role=BENIGN_CONTROL,
-        harmful=False,
-        judge=JUDGE_REFUSAL,
-        tier="scale",
-        purpose="Larger benign pool for a stable false-refusal rate.",
-        note="or-bench-toxic is NOT benign and is never fetched. The category column is "
-             "identical across benign and toxic files, so toxic exclusion is file-level only. "
-             "'orbench_hard' is the hard-1k subset most models over-refuse.",
-    ),
-    "orbench_hard": Dataset(
-        name="orbench_hard",
-        role=BENIGN_CONTROL,
-        harmful=False,
-        judge=JUDGE_REFUSAL,
-        tier="scale",
-        purpose="OR-Bench hard-1k: the benign prompts models most often wrongly refuse.",
-        note="1319 rows despite the '1k' name.",
+        tier="comparability",
+        purpose="The harmless pole of the harmful-vs-harmless diff-in-means in "
+                "app.py::_load_or_extract_direction — i.e. the refusal-direction (Arditi) "
+                "replication. Read at extraction time, never scored.",
+        scorable=False,
+        note="CC BY-NC 4.0 — non-commercial. EXTRACTION ONLY in this tree. Alpaca is also one of "
+             "the proposal's three benign controls (XSTest / Alpaca / OR-Bench), but that arm is "
+             "not built here — see 'Benign controls: not built' in DATASET_SOURCES.md, so score() "
+             "refuses it rather than half-implementing the role. The direction this half helps "
+             "build is the same KIND of vector Control 4 will need later, but no control exists "
+             "yet — Control 4 is a comparison against a cross-domain transfer, and that is "
+             "Stage 5. Do not read this entry as a control arm.",
     ),
 }
+# NOTE: the benign-control arm (XSTest / Alpaca-as-control / OR-Bench) is deliberately absent.
+# See "Benign controls: not built" in vendor/DATASET_SOURCES.md.
 
 SPLITS = ("extract", "test", "all")
 

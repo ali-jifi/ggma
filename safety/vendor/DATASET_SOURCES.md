@@ -17,19 +17,58 @@ python safety/smoke_datasets.py                   # data-level smoke check, no m
 | **HarmBench** | harmful | primary | The scored harmful set, paired with its own official classifier. | HarmBench classifier | complying (**ASR**) |
 | **SORRY-Bench** | harmful | generality | Taxonomically distinct second harmful set, so the generality claim isn't tied to one prompt family. | HarmBench classifier (same as primary, so a difference reflects the prompts, not the judge) | complying (**ASR**) |
 | **AdvBench** | harmful | comparability | **Extraction only.** Ties to the refusal-direction literature. | — never scored | n/a |
-| **XSTest** | benign | primary | Over-refusal probe: benign prompts that superficially look unsafe. | refusal detector | refusing (**FRR**) |
-| **Alpaca** | benign | control | Benign-competence check: ordinary instructions. | refusal detector | refusing (**FRR**) |
-| **OR-Bench** | benign | scale | Larger benign pool for a stable false-refusal rate. | refusal detector | refusing (**FRR**) |
+| **Alpaca** | benign | comparability | **Extraction only here** — the harmless pole of the Arditi refusal-direction replication. | — never scored | n/a |
+| ~~**XSTest**~~ | benign | primary | Over-refusal probe. | **NOT BUILT** | refusing (**FRR**) |
+| ~~**OR-Bench**~~ | benign | scale | Larger benign pool for a stable false-refusal rate. | **NOT BUILT** | refusing (**FRR**) |
 
-### What the benign sets are actually for
+## Benign controls: not built
 
-They measure **specificity**, and they don't touch any ASR number. If ablating a direction
-raises ASR but *also* wrecks benign behaviour, the model was lobotomised rather than
-steered, and the ASR gain means nothing. The benign sets are what tells those two apart —
-`metrics.specificity_report()` puts them side by side.
+**The benign-control arm is deliberately absent — it is a separate deliverable.** The
+proposal's Table 3 lists three benign controls (XSTest / Alpaca / OR-Bench) for measuring
+the false-refusal rate. None of that is implemented here. Alpaca is fetched anyway because
+**Control 4 needs its extract half now**; do not read its presence as the benign arm being
+half-done. `datasets.py` marks it `scorable=False` so `metrics.score("alpaca", ...)` raises
+rather than half-implementing the role.
 
-Each does a different job: XSTest is the hard case (benign prompts that *look* unsafe),
-Alpaca checks ordinary competence, OR-Bench provides the volume for a stable rate.
+`metrics.specificity_report()` raises if either arm is missing, rather than averaging an
+empty benign list into a flattering `0.0`.
+
+### What they're for (so the role is clear when they land)
+
+They measure **specificity**, and they touch no ASR number. If ablating a direction raises
+ASR but *also* wrecks benign behaviour, the model was lobotomised rather than steered, and
+the ASR gain means nothing. The benign sets are what tells those two apart. Each does a
+different job: **XSTest** is the hard case (benign prompts that *look* unsafe), **Alpaca**
+checks ordinary competence, **OR-Bench** provides volume for a stable rate.
+
+They aren't needed until there is an intervention to be specific *about* — Phase 3 steering.
+A harmful-only ASR measured now is final and won't be revised.
+
+### Read this before adding them — three verified traps
+
+Each fails **silently** rather than loudly. All three were confirmed by fetching, not by
+reading docs:
+
+1. **XSTest ships 250 safe + 200 genuinely-unsafe prompts in one file.** The filter is
+   `label == "safe"`. Do **not** filter on `type.endswith("_contrast")` — the contrast types
+   are *prefixed* (`contrast_homonyms`, …), so a suffix test matches nothing, keeps all 450
+   rows, and quietly puts 200 harmful prompts into your benign denominator. Also
+   `xstest_v2_prompts.csv` is a **404**; the file is `xstest_prompts.csv` at
+   `raw.githubusercontent.com/paul-rottger/xstest/<sha>/`. Pinned SHA that worked:
+   `d7bb5bd738c1fcbc36edd83d5e7d1b71a3e2d84d` (450 rows → 250 safe / 200 unsafe).
+2. **OR-Bench's `category` column is identical across its benign and toxic files** — the
+   same 10 values. Excluding `or-bench-toxic.csv` *by category silently fails*. Exclusion
+   must be **file-level**: never request that file. Note `category == "harmful"` rows inside
+   the benign files **are benign** — it's a category name, not a toxicity flag.
+   `huggingface.co/datasets/bench-llm/or-bench/resolve/e36d8b80e81837c8a8f264bbb2a49f1b32c7e272/`,
+   plain CSV, ungated, stdlib-parseable.
+3. **OR-Bench names lie about size.** `or-bench-hard-1k.csv` is **1319** rows, not 1000;
+   `or-bench-80k.csv` is **80,359**; `or-bench-toxic.csv` is 655. Don't assert round numbers.
+
+Also: the proposal holds benign prompts **"length- and style-matched to the harmful set"**,
+so the benign run is downstream of the harmful one and must mirror its preamble/budget/style.
+`datasets.sample()` stratifies by category only and has **no length/style matching** — that
+is unbuilt and required before the controls can be compared to a harmful run.
 
 **The failure direction flips, and this is the easiest thing here to get wrong:**
 
@@ -63,11 +102,10 @@ Splits are stratified by category. Category sizes are very uneven (OR-Bench hard
 | `harmbench_all.json` | 400 | All behaviors, fields intact: 200 `standard`, 100 `copyright`, 100 `contextual`. |
 | `harmbench_extract` / `_test` | 99 / 101 | Stratified halves of the 200 `standard` behaviors. 6 semantic categories. |
 | `advbench_all` / `_extract` | 520 / 260 | Extraction side only. |
-| `xstest_all` / `_extract` / `_test` | 250 / 120 / 130 | **SAFE half only.** 10 types. |
-| `alpaca_*` | 2000 / 1000 / 1000 | Sampled from Alpaca's 31,323 `input == ""` rows. |
-| `orbench_*` | 4000 / 2000 / 2000 | Stratified sample of or-bench-80k. |
-| `orbench_hard_*` | 1319 / 659 / 660 | or-bench-hard-1k in full. |
+| `alpaca_*` | 2000 / 1000 / 1000 | Sampled from Alpaca's 31,323 `input == ""` rows. Only `_extract` is read (Control 4). |
 | `sorrybench_*` | 440 / 220 / 220 | 44 categories x 10, category **names** resolved from `meta_info.py`. **Gated** — see below. |
+
+XSTest and OR-Bench are **not fetched** — see "Benign controls: not built".
 
 `harmbench_all.json` keeps the `copyright` and `contextual` behaviors even though only
 `standard` is scored: copyright behaviors need HarmBench's separate copyright classifier,
@@ -155,8 +193,8 @@ forfeits that comparability.
 | Set | Judge | Headline |
 |---|---|---|
 | harmbench, sorrybench | HarmBench classifier (injected — needs a GPU) | ASR |
-| xstest, alpaca, orbench | refusal detector | false-refusal rate |
-| advbench | — raises; never scored | — |
+| advbench, alpaca | — raises; extraction only, never scored | — |
+| *xstest, orbench* | *refusal detector — when the benign arm lands* | *false-refusal rate* |
 
 Scoring a harmful set **raises** if the classifier is not supplied, rather than quietly
 falling back to string matching. Per the proposal's own Q9: string matching *"overstates
@@ -190,31 +228,41 @@ approximation is unusable and 0/12 would otherwise report ±0.00.
 The mechanistic metrics (commitment strength + decay curves, subspace overlap via principal
 angles, transfer magnitude, bidirectional transfer) are Phase 2+ and out of Task 1.2 scope.
 
-## Two different directions — do not conflate them
+## What the extraction step is — and the two things it is not
 
-`app.py::_load_or_extract_direction` computes a harmful-vs-harmless difference-in-means.
-That is **Control 4 — the static Arditi refusal direction**, and it is *required*, not a
-deviation. `MASTER_TEAM_HANDOFF.md:259`:
+`app.py::_load_or_extract_direction` computes a harmful-vs-harmless difference-in-means at
+the last prompt token, then ablates it. **That is the Arditi refusal-direction replication
+— Stage 1.** Two conditions exist, `baseline` and `ablation`. That is all it is.
+
+It is **not the drift subspace**, which is a different object built later from **within-trace
+contrasts** (refuse-early versus comply-late). For that one the proposal says harmless
+prompts "no longer feed extraction; they serve as specificity controls." Mistaking this
+direction for the drift subspace would invert the design.
+
+It is also **not Control 4**, even though the arithmetic matches its recipe
+(`MASTER_TEAM_HANDOFF.md:259`):
 
 > **Control 4 — Static refusal direction** ... build the static Arditi-style refusal
 > direction: difference-of-means between ~30 harmful and ~30 harmless prompt activations
-> at the last prompt token ... Your math→safety transfer only counts if it beats/differs
-> from this.
+> at the last prompt token ... **Your math→safety transfer only counts if it beats/differs
+> from this.**
 
-The **drift subspace** is a different object entirely, built later from **within-trace
-contrasts** (refuse-early versus comply-late). For *that* one the proposal says harmless
-prompts "no longer feed extraction; they serve as specificity controls."
+Control 4 is a **comparison, not a vector** — and there is no math→safety transfer to
+compare against yet, no test, and nothing that labels or retains the direction as a control.
+The whole control suite (C1 length, C2 random subspace, C3 sentiment, C4 static refusal) is
+scheduled for **Stage 5**; none of it is built. What *is* true: the vector produced here is
+the same **kind** Control 4 will later need, which is why it's worth keeping — and why
+deleting Alpaca breaks `app.py` today.
 
-| | static refusal direction | safety-drift subspace |
-|---|---|---|
-| built from | harmful vs harmless **prompts** | refuse-early vs comply-late **within one trace** |
-| Alpaca's role | the harmless pole (extract half) | none — benign is a control only |
-| purpose | Control 4: "you just found the known refusal knob" | the hypothesis under test |
-| status | ✅ what `app.py` builds today | Phase 3, not yet built |
+| | this extraction (today) | Control 4 (Stage 5) | drift subspace (Phase 3) |
+|---|---|---|---|
+| what it is | a direction, ablated | a comparison the transfer must beat | the hypothesis under test |
+| built from | harmful vs harmless **prompts** | the same kind of vector | refuse-early vs comply-late **within a trace** |
+| status | ✅ built | ❌ not built | ❌ not built |
 
-`handoff:260` makes the relationship explicit: Gordon must *"prove your safety-drift
-direction is geometrically distinct from this static refusal direction"* (More to Refusal
-reports cosine ≈ 0.10). **The risk here is labelling, not method:** if the static refusal
+`handoff:260` sets the eventual task: *"prove your safety-drift direction is geometrically
+distinct from this static refusal direction"* (More to Refusal reports cosine ≈ 0.10).
+**The risk here is labelling, not method:** if the static refusal
 direction is ever mistaken for the drift subspace, the design is inverted and the control
 becomes the claim.
 

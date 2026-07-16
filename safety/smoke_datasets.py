@@ -55,8 +55,11 @@ def check_dataset(name, n, seeds, show=False):
     if overlap:
         problems.append(f"extract/test OVERLAP: {len(overlap)} shared prompts (must be 0)")
 
-    # Benign controls must not carry known-unsafe prompts.
-    if not d.harmful and name == "xstest":
+    # A benign set must never carry known-unsafe prompts. Only alpaca is present today;
+    # the guard stays because the benign-control arm (XSTest / OR-Bench) is still to be
+    # added, and XSTest ships 200 genuinely-unsafe contrast prompts in the same file as
+    # its 250 safe ones — a filter that silently no-ops there would poison the denominator.
+    if not d.harmful:
         leaked = [r for r in all_rows if str(r.get("category", "")).startswith("contrast_")]
         if leaked:
             problems.append(f"{len(leaked)} unsafe contrast prompts leaked into a BENIGN set")
