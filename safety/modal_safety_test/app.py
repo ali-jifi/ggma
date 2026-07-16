@@ -70,7 +70,16 @@ GEN_TOP_P = 0.95
 GEN_SEED = 0
 MAX_NEW_TOKENS = 2048   # reasoning needs room for the think block + answer (tunable)
 
-DIRECTION_REMOTE = f"{CACHE_DIR}/directions/{MODEL_ALIAS}"   # extracted-direction cache (persists in Volume)
+# Extracted-direction cache (persists in the Volume). The key carries EVERY input that
+# changes the vector, not just the model: a direction extracted at layer 14 is a different
+# object from one at layer 20, and the proposal calls for sweeping layers ("sweep layers on
+# held-out data, pick where steering actually reproduces drift; do not assume a layer"). Key
+# on the alias alone and every sweep step silently returns the first direction — you would
+# conclude something about layer 20 that you measured at layer 14, with no error. Distinct
+# params therefore get distinct paths, so old directions stay cached instead of being
+# invalidated.
+DIRECTION_KEY = f"L{EXTRACT_LAYER}-pos{EXTRACT_POS}-n{N_EXTRACT}-seed{GEN_SEED}"
+DIRECTION_REMOTE = f"{CACHE_DIR}/directions/{MODEL_ALIAS}/{DIRECTION_KEY}"
 
 # --- Modal app / infra --------------------------------------------------------
 app = modal.App("safety-reasoning-eval")
@@ -233,7 +242,25 @@ def _load_or_extract_direction(model, tokenizer):
     import torch
 
     dpath = f"{DIRECTION_REMOTE}/direction.pt"
+    mpath = f"{DIRECTION_REMOTE}/direction_metadata.json"
     if os.path.exists(dpath):
+        # The path key already covers layer/pos/n/seed. This catches what it cannot:
+        # MODEL_ALIAS is hand-written, so changing MODEL_PATH without changing the alias
+        # would silently serve another model's direction. Refuse rather than guess.
+        if os.path.exists(mpath):
+            with open(mpath) as f:
+                meta = json.load(f)
+            drift = {k: (meta.get(k), v) for k, v in
+                     (("model", MODEL_PATH), ("layer", EXTRACT_LAYER), ("pos", EXTRACT_POS),
+                      ("n_extract", N_EXTRACT), ("seed", GEN_SEED))
+                     if meta.get(k) != v}
+            if drift:
+                raise SystemExit(
+                    f"Cached direction at {DIRECTION_REMOTE} does not match this config:\n"
+                    + "\n".join(f"    {k}: cached={c!r} but config={w!r}" for k, (c, w) in drift.items())
+                    + "\nThis usually means MODEL_PATH changed without MODEL_ALIAS. Fix the alias "
+                      "(the cache is keyed on it) or delete that directory from the Volume."
+                )
         return torch.load(dpath, map_location=model.device), "cached"
 
     # AdvBench is the extraction-side harmful set (proposal: extraction only, never
@@ -263,7 +290,7 @@ def _load_or_extract_direction(model, tokenizer):
 
     os.makedirs(DIRECTION_REMOTE, exist_ok=True)
     torch.save(direction.cpu(), dpath)
-    with open(f"{DIRECTION_REMOTE}/direction_metadata.json", "w") as f:
+    with open(mpath, "w") as f:
         json.dump(
             {"model": MODEL_PATH, "layer": EXTRACT_LAYER, "pos": EXTRACT_POS,
              "n_extract": N_EXTRACT, "seed": GEN_SEED}, f, indent=2
