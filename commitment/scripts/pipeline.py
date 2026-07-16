@@ -70,7 +70,8 @@ def collect_trace(model, tok, model_meta, prompt, matcher, *,
         budget_condition=str(budget_condition),
         thinking_tokens=int(think_tokens),
         response_text=text,
-        final_answer=final_answer,
+        conclusion_key=parent_key,
+        final_answer=final_answer,   # deprecated mirror of conclusion_key
         outcome=outcome,
         gold=str(prompt["gold"]),
         scorer_version=scorer_version(matcher),
@@ -88,6 +89,11 @@ def collect_trace(model, tok, model_meta, prompt, matcher, *,
         think_start_idx=int(think_start),
         think_end_idx=int(think_end),
         split=split,
+        # v0.3 run provenance: these change the numbers, so they ride on the row.
+        dtype=model_meta.get("dtype", ""),
+        attn_implementation=model_meta.get("attn_implementation", ""),
+        prompt_tokens=int(prompt_len),
+        total_tokens=int(full_ids.shape[1]),
     )
     if getattr(matcher, "last_confidence", None) is not None:
         tr.scorer_confidence = matcher.last_confidence
@@ -100,15 +106,18 @@ def collect_trace(model, tok, model_meta, prompt, matcher, *,
         )
         if positions:
             match_fn = to_match_fn(matcher, parent_key)
-            curve, texts = H.rollout_commitment_curve(
+            curve, closure_rates, texts = H.rollout_commitment_curve(
                 model, tok, full_ids, positions, match_fn,
                 n_rollouts=n_rollouts, temperature=decode_temp, top_p=decode_top_p,
                 base_seed=seed, max_new_tokens=rollout_max_new_tokens,
                 store_texts=store_rollout_texts,
             )
             tr.rollout_prefix_positions = positions
+            tr.rollout_prefix_fracs = _prefix_fracs(positions, think_start, think_end)
             tr.n_rollouts_per_prefix = n_rollouts
             tr.rollout_outcomes = curve
+            tr.rollout_closure_rates = closure_rates      # R5
+            tr.rollout_max_new_tokens = rollout_max_new_tokens
             tr.rollout_completion_texts = texts
             tr.rollout_decode_temp = decode_temp
             tr.rollout_decode_top_p = decode_top_p
@@ -164,6 +173,15 @@ def _attach_layer2(tr, model, tok, full_ids, prompt, attn_layers,
     tr.control_spans = control_spans
     tr.control_span_len = control_len
     tr.attn_layers_used = list(attn_layers)
+
+
+def _prefix_fracs(positions, think_start, think_end):
+    """v0.3 rollout_prefix_fracs: each prefix as a fraction through the think
+    block, so curves from traces of different lengths share an x-axis."""
+    span = think_end - think_start
+    if span <= 0:
+        return []
+    return [round((p - think_start) / span, 6) for p in positions]
 
 
 def _outcome(domain, matcher, key, gold):

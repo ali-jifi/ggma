@@ -40,14 +40,25 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(REPO_ROOT))
 
 
-def build_pairs(rows, split, steering, corrected=True):
-    """Return (x, y, meta_row) pooled over eligible traces. meta_row is the
-    first contributing row, used to stamp layer/policy/norm on the artifact.
+def build_pairs(rows, split, steering, corrected=True, min_closure=0.8):
+    """Return (x, y, meta_row, kept, skipped, dropped_low_closure) pooled over
+    eligible traces. meta_row is the first contributing row, used to stamp
+    layer/policy/norm on the artifact.
+
     corrected=True uses attn_to_anchor - attn_to_control and skips rows
     without attn_to_control; corrected=False uses raw attn_to_anchor (legacy
-    pre-correction rows only)."""
+    pre-correction rows only).
+
+    R5: a (proxy, outcome) pair at a prefix whose rollouts rarely closed has an
+    outcome that undercounts commitment (truncations score as misses), which
+    would poison the isotonic fit. Pairs with closure < min_closure are dropped
+    and counted. The threshold is clamped to the row's closure quantum
+    (1 - 1/n_rollouts_per_prefix) so one straggler rollout doesn't discard the
+    pair at small k. Rows with no rollout_closure_rates at all keep all pairs
+    but are counted in dropped_low_closure as unverifiable (legacy traces --
+    re-collect for a trustworthy calibration)."""
     x, y, meta_row = [], [], None
-    kept = skipped = 0
+    kept = skipped = dropped_low_closure = 0
     for r in rows:
         if r.get("split") != split:
             continue
@@ -57,6 +68,7 @@ def build_pairs(rows, split, steering, corrected=True):
         ctrl = r.get("attn_to_control")
         curve = r.get("rollout_outcomes")
         positions = r.get("rollout_prefix_positions")
+        closure = r.get("rollout_closure_rates") or []
         if not attn or not curve or not positions:
             skipped += 1
             continue
@@ -67,21 +79,27 @@ def build_pairs(rows, split, steering, corrected=True):
         if ts < 0:
             skipped += 1
             continue
+        n_roll = r.get("n_rollouts_per_prefix") or 0
+        row_min = min(min_closure, 1.0 - 1.0 / n_roll) if n_roll else min_closure
         contributed = False
         for j, p in enumerate(positions):
             k = p - ts
-            if 0 <= k < len(attn) and j < len(curve):
-                v = attn[k] - ctrl[k] if corrected else attn[k]
-                x.append(float(v))
-                y.append(float(curve[j]))
-                contributed = True
+            if not (0 <= k < len(attn) and j < len(curve)):
+                continue
+            if j < len(closure) and closure[j] < row_min - 1e-9:
+                dropped_low_closure += 1     # R5: cap artifact, not commitment
+                continue
+            v = attn[k] - ctrl[k] if corrected else attn[k]
+            x.append(float(v))
+            y.append(float(curve[j]))
+            contributed = True
         if contributed:
             kept += 1
             if meta_row is None:
                 meta_row = r
         else:
             skipped += 1
-    return x, y, meta_row, kept, skipped
+    return x, y, meta_row, kept, skipped, dropped_low_closure
 
 
 def main():
@@ -93,6 +111,10 @@ def main():
     ap.add_argument("--steering", default="none",
                     help="steering_condition to fit under (R2: one cal per condition)")
     ap.add_argument("--domain", default="math", choices=["math", "safety"])
+    ap.add_argument("--min-closure", type=float, default=0.8,
+                    help="R5: drop (proxy, outcome) pairs from prefixes whose "
+                         "rollout closure rate is below this (outcome there is "
+                         "the token cap, not commitment)")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
@@ -109,17 +131,20 @@ def main():
 
     rows = load_traces(args.traces)
     sink_corrected = True
-    x, y, meta_row, kept, skipped = build_pairs(rows, args.split, args.steering)
+    x, y, meta_row, kept, skipped, dropped = build_pairs(
+        rows, args.split, args.steering, min_closure=args.min_closure)
     if not x:
         sink_corrected = False
-        x, y, meta_row, kept, skipped = build_pairs(rows, args.split,
-                                                    args.steering, corrected=False)
+        x, y, meta_row, kept, skipped, dropped = build_pairs(
+            rows, args.split, args.steering, corrected=False,
+            min_closure=args.min_closure)
         if x:
             print("[cal] WARNING: no sink-corrected rows; falling back to raw "
                   "attn_to_anchor (legacy traces). Re-collect with the current "
                   "harness for a corrected calibration.")
     print(f"[cal] traces contributing: {kept}, skipped: {skipped}, "
-          f"pairs: {len(x)}, sink_corrected: {sink_corrected}")
+          f"pairs: {len(x)}, dropped_low_closure: {dropped}, "
+          f"sink_corrected: {sink_corrected}")
     if len(x) < 3:
         raise SystemExit("not enough (proxy, outcome) pairs to fit; collect more "
                          "Layer 2 traces on the selection split first")
@@ -140,8 +165,13 @@ def main():
         "attn_norm_method": norm_method,
         "sink_corrected": sink_corrected,
         "sink_exclude_k": meta_row.get("sink_exclude_k"),
+        "min_closure": args.min_closure,                 # R5 pair filter
+        "n_pairs_dropped_low_closure": dropped,
         "n_points": len(x),
         "traces_file": str(args.traces),
+        # v0.3: a calibration is only valid for the model/schema it was fit on.
+        "calibration_model": meta_row.get("model"),
+        "schema_version": meta_row.get("schema_version"),
     }
     out_path = Path(args.out or (ROOT / "outputs" / "calibrations" /
                                  f"{args.domain}_{args.steering}.json"))

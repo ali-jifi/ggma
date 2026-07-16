@@ -13,6 +13,36 @@ The three commitment layers (see `harness.py` docstring, rule R1):
   calibrated against Layer 1.
 - **Margin/entropy** - secondary proxy, never the definition.
 
+### Read the closure rate before you believe a curve (R5)
+
+A rollout cut off by `--rollout-max-new-tokens` before it emits `</think>` never
+committed to anything, but it scores exactly like one that genuinely changed its
+mind. Early prefixes have more reasoning left to emit, so they get truncated more
+often than late ones — **that alone manufactures a rising commitment curve out of
+the token cap**. So every curve now ships with `rollout_closure_rates` (fraction
+of rollouts that actually closed, per prefix):
+
+- Closure **high and flat** across prefixes → the curve is commitment. Trust it.
+- Closure **low, or rising with prefix index** → the curve may be the cap. The
+  smoke test prints `CAP-CONFOUNDED` and **fails** the gate. Raise
+  `--rollout-max-new-tokens` and re-run.
+
+Unclosed rollouts can never match (every matcher returns `None` without
+`</think>`), so hits ⊆ closures and `P(conclusion | closed) = outcome/closure` —
+`analysis.curves.conditional_curve()` computes it. `validate_trace(stage="metric")`
+**refuses** a curve with no closure rates: an uninterpretable curve isn't a valid
+one.
+
+### What the schema version means
+
+`schema_version = "trace-v0.3"` means **every v0.3 field exists**, not that every
+field has a value. `harness.SCHEMA_PENDING_FIELDS` lists fields declared but never
+populated (currently `shape_bic_delta`, `shape_max_drop` — the shape estimator
+isn't pre-registered yet). Read those nulls as "not computed", never as "no
+effect". `conclusion_key` is the canonical conclusion label; `final_answer` is a
+deprecated mirror kept so trace-v2 readers keep working — write both, read
+`conclusion_key`.
+
 ## Layout
 
 All commitment-method code lives under `commitment/`; only the frozen engine and

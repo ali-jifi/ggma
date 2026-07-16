@@ -76,6 +76,57 @@ def test_curves_selftest():
     curves._selftest()  # raises AssertionError on any regression
 
 
+def test_closure_confound_detects_token_cap():
+    """R5: a rising curve whose closure ALSO rises is the token cap, not
+    commitment. This must be caught, since it looks like a perfect result."""
+    rising = [0.0, 0.2, 0.5, 0.8, 1.0]
+    assert not curves.closure_confound(rising, [1.0] * 5)["confounded"]
+    cc = curves.closure_confound(rising, [0.1, 0.3, 0.5, 0.8, 1.0])
+    assert cc["confounded"] and cc["rising_closure"]
+    # uniformly low closure is unreadable too
+    assert curves.closure_confound(rising, [0.3] * 5)["confounded"]
+    # absent closure => cannot certify => treated as confounded
+    assert curves.closure_confound(rising, [])["confounded"]
+
+
+def test_closure_thresholds_respect_rollout_quantum():
+    """At k=4, closure is quantized to 0.25 steps: one straggler rollout
+    (closure 0.75) or a one-quantum rise must NOT flag the curve, while a
+    genuinely capped prefix (0.5 = two stragglers) still must."""
+    curve = [0.75, 1.0, 1.0, 1.0]
+    one_straggler = [0.75, 1.0, 1.0, 1.0]
+    assert curves.closure_confound(curve, one_straggler)["confounded"]  # k unknown: strict
+    assert not curves.closure_confound(curve, one_straggler, n_rollouts=4)["confounded"]
+    two_stragglers = [0.5, 1.0, 1.0, 1.0]
+    assert curves.closure_confound(curve, two_stragglers, n_rollouts=4)["confounded"]
+    # k >= 5 keeps the pre-registered 0.8/0.2 thresholds unchanged
+    assert curves.closure_confound(curve, one_straggler, n_rollouts=8)["confounded"]
+
+
+def test_conditional_curve():
+    # hits are a subset of closures, so P(match|closed) == curve/closure
+    assert curves.conditional_curve([0.25, 0.5], [0.5, 1.0]) == [0.5, 0.5]
+    import math
+    assert math.isnan(curves.conditional_curve([0.0], [0.0])[0])
+
+
+def test_sanity_check_fails_on_cap_confounded_population():
+    rising = [0.0, 0.2, 0.5, 0.8, 1.0]
+    cap = [0.1, 0.3, 0.5, 0.8, 1.0]
+    reports = [curves.curve_report(rising, cap)] * 5
+    ok, summary = curves.sanity_check(reports)
+    assert not ok and "token-cap" in summary["reason"]
+    ok2, s2 = curves.sanity_check([curves.curve_report(rising, [1.0] * 5)] * 5)
+    assert ok2 and s2["confounded_frac"] == 0.0
+
+
+def test_sanity_check_warns_when_closure_absent():
+    rising = [0.0, 0.2, 0.5, 0.8, 1.0]
+    ok, summary = curves.sanity_check([curves.curve_report(rising)] * 5)
+    assert summary["closure_checked"] is False
+    assert "closure_warning" in summary
+
+
 def test_curve_metrics():
     assert curves.monotonicity([0.0, 0.5, 1.0]) == 1.0
     assert curves.is_flat_noise([0.5, 0.5, 0.5])

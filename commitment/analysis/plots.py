@@ -60,6 +60,32 @@ def plot_commitment_curves(rows, out_png, max_curves=40):
     print(f"[plots] {len(crows)} curves -> {out_png}")
 
 
+def plot_closure_rates(rows, out_png, max_curves=40):
+    """R5 companion to the curves plot: per-prefix closure rate for the same
+    traces. Read the commitment curves ONLY where these are high and flat --
+    low or rising closure means the curve may be the token cap, not commitment."""
+    crows = [r for r in _curve_rows(rows) if r.get("rollout_closure_rates")][:max_curves]
+    if not crows:
+        print("[plots] no rows with rollout_closure_rates (legacy traces?); "
+              "skipping closure plot -- curves cannot be certified (R5)")
+        return
+    fig, ax = plt.subplots(figsize=(7, 5))
+    for r in crows:
+        z = r["rollout_closure_rates"]
+        x = np.linspace(0, 1, len(z))
+        ax.plot(x, z, color="tab:orange", alpha=0.5, lw=1.2)
+    ax.axhline(0.8, color="gray", ls="--", lw=1, label="0.8 (read-with-care line)")
+    ax.set_xlabel("prefix fraction through think block")
+    ax.set_ylabel("P(rollout emitted </think> before cap)")
+    ax.set_title("Rollout closure rates (R5): trust curves only where high & flat")
+    ax.set_ylim(-0.02, 1.02)
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(out_png, dpi=120)
+    plt.close(fig)
+    print(f"[plots] {len(crows)} closure curves -> {out_png}")
+
+
 def plot_onset_hist(rows, out_png):
     """Histogram of behavioral commitment onset (fraction through think block)."""
     crows = _curve_rows(rows)
@@ -116,6 +142,7 @@ def main():
     outdir.mkdir(parents=True, exist_ok=True)
     print(f"[plots] {len(rows)} rows from {args.traces}")
     plot_commitment_curves(rows, outdir / "commitment_curves.png")
+    plot_closure_rates(rows, outdir / "closure_rates.png")
     plot_onset_hist(rows, outdir / "onset_hist.png")
     plot_calibration(rows, outdir / "calibration_scatter.png")
 
