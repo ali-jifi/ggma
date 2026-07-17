@@ -17,8 +17,10 @@ jobs:
       - run: ruff check .
 
   test:
-    # Torch-free tests only: matchers, split logic, curve diagnostics. No GPU,
-    # no model download -- just numpy + pytest, so this stays fast and free.
+    # Torch-free tests only: matchers, split logic, curve diagnostics, and the
+    # safety-side split/guard/labeler invariants. No GPU, no model download, and
+    # nothing needing the built datasets (vendor/data is git-ignored, so a bare
+    # runner does not have it) -- just numpy + pytest, so this stays fast and free.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -26,4 +28,4 @@ jobs:
         with:
           python-version: "3.13"
       - run: pip install numpy pytest
-      - run: pytest -q commitment/tests/
+      - run: pytest -q commitment/tests/ safety/tests/
