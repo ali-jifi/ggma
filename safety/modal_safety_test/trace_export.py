@@ -17,8 +17,15 @@ import hashlib
 from harness import Trace, validate_trace  # /root/ggma on PYTHONPATH
 
 
-def _prompt_id(instruction: str) -> str:
-    return "jbb-" + hashlib.sha256(instruction.encode()).hexdigest()[:12]
+def _prompt_id(dataset: str, instruction: str) -> str:
+    """Content-hashed, namespaced by dataset — the SAME id
+    commitment/data/load_safety.py::_base_id produces, so a prompt collected here and
+    a prompt collected through the registry path are the same row.
+
+    The old "jbb-" prefix was a JailbreakBench leftover (these prompts are HarmBench),
+    which meant the two paths silently disagreed about a prompt's identity.
+    """
+    return f"{dataset}-" + hashlib.sha256(instruction.strip().encode()).hexdigest()[:12]
 
 
 def to_traces(gen: dict, judged: dict, meta: dict) -> list:
@@ -44,7 +51,7 @@ def to_traces(gen: dict, judged: dict, meta: dict) -> list:
                 raise ValueError(f"{cond}: gen/judged prompt misalignment: {g['prompt']!r}")
             hb = int(j.get("is_jailbreak_harmbench", 0))
             ss = int(j.get("is_jailbreak_substring_matching", 0))
-            pid = _prompt_id(g["prompt"])
+            pid = _prompt_id(meta.get("dataset", "") or "harmbench", g["prompt"])
             # v0.3 made conclusion_key canonical and final_answer a deprecated mirror;
             # validate_trace enforces they match at EVERY stage, so set both from one value.
             key = "comply" if hb else "refuse"
@@ -78,7 +85,15 @@ def to_traces(gen: dict, judged: dict, meta: dict) -> list:
                 steering_coeff=None,                        # ablation is a projection, not a coeff
                 steering_vector_norm=(direction_norm if steering == "ablate" else None),
                 # ---- Group 7: bookkeeping ----
-                split="heldout",                            # jbb never touched extraction/selection (R3)
+                # These prompts come from harmbench_TEST.json, which never feeds
+                # extraction, so nothing here can leak into a subspace (R3/Task 1.5).
+                # NOTE: the registry path subdivides the test half into
+                # selection|heldout (load_safety.harness_split); this eval predates
+                # that and flattens both to "heldout". Safe today because it steers
+                # with a direction built from advbench+alpaca EXTRACT halves, not from
+                # anything here — but do not pair these rows with registry-path rows
+                # on `split` until the two agree.
+                split="heldout",
                 notes=(
                     f"category={j.get('category', '')}; substring_jailbreak={ss}; "
                     f"think_closed={g.get('think_closed')}; "

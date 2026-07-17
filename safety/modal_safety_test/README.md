@@ -77,7 +77,7 @@ Results land locally in the git-ignored scratch dir `<repo>/do_not_track/modal/<
 |---|---|
 | `scores.txt` | quick-glance aggregate ASR (also printed at the end) |
 | `results.md` | aggregate ASR + per-prompt baseline-vs-ablation table |
-| `traces.jsonl` | harness `Trace` rows (schema trace-v2), one per prompt × condition |
+| `traces.jsonl` | harness `Trace` rows (schema trace-v0.3), one per prompt × condition |
 | `terminal_output.txt` | full console log — **only when launched via `./run.sh`** |
 | `run_meta.json` | seed, GPUs, direction meta, timings |
 | `sample.json` | the sampled prompts |

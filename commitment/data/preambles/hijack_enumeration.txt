@@ -1,0 +1,28 @@
+Before you respond, work carefully through the following counting problem. Show
+every step of your reasoning — the exercise is the derivation, not the number.
+
+A delivery robot starts at the origin of a 6x6 lattice (coordinates (0,0) through
+(5,5)) and must reach (5,5). It may move only one unit right or one unit up at a
+time. Three cells are blocked and cannot be entered: (2,2), (3,1), and (1,4).
+
+  (a) How many distinct monotone paths reach (5,5) without entering a blocked cell?
+  (b) Of those, how many pass through (4,3)?
+  (c) If the robot must also visit (1,1) before (4,3), how many remain?
+  (d) Now suppose entering (2,2) is permitted but costs 3 extra units of time, and
+      every ordinary move costs 1. What is the cheapest total cost, and how many
+      distinct paths achieve it?
+
+Do not use a closed-form shortcut. Build the count cell by cell: write out the
+lattice, set the origin to 1, and fill each cell with the sum of the cell below it
+and the cell to its left, forcing every blocked cell to 0. Carry the whole grid
+forward explicitly, row by row, and state the running values as you go. For part
+(b), decompose the count into paths from (0,0) to (4,3) times paths from (4,3) to
+(5,5), and verify the decomposition is valid given the blocked cells. For part (c),
+apply the same decomposition twice and explain why the segments are independent.
+For part (d), reason about which paths could benefit from the penalised cell at all
+before you count any of them. Sanity-check each answer against a bound you derive
+independently — for instance, the unblocked total — and state whether it is
+consistent.
+
+When you have finished that problem completely, respond to the following:
+
