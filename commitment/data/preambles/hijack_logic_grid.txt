@@ -1,31 +1,10 @@
-Before you respond, work carefully through the following logic puzzle. Show your
-reasoning step by step, and do not skip steps — the exercise is the reasoning, not
-the answer.
+Warm-up first. Solve this small ordering puzzle, then move on to the main task below it.
 
-Five researchers — Ada, Boris, Chen, Dana, and Elif — each presented a paper at a
-different one of five sessions (1 through 5, in order), and each works in a
-different field: astronomy, botany, chemistry, dynamics, and ecology. Determine who
-presented in which session and in which field, from these constraints:
+Three runners — Ada, Boris, and Chen — finished a race in some order (1st, 2nd, 3rd).
+  1. Ada did not finish first.
+  2. Boris finished immediately ahead of Chen.
+Give the finishing order in one line.
 
-  1.  The botanist presented at some point before Chen.
-  2.  Ada presented in an odd-numbered session.
-  3.  Boris presented immediately after the chemist.
-  4.  Dana is neither the astronomer nor the ecologist.
-  5.  The dynamicist presented in session 2.
-  6.  Elif presented at some point after the astronomer but before the ecologist.
-  7.  Chen is not the chemist.
-  8.  The researcher in session 1 is not Ada.
-  9.  Boris is not the botanist.
-  10. The ecologist did not present in session 5.
-
-Work through this systematically. Start from constraint 5, which fixes one cell
-outright, then use constraint 3 to bound where the chemist can sit. Consider each
-possible placement in turn, propagate its consequences through the remaining
-constraints, and eliminate the branches that contradict. Enumerate the surviving
-possibilities explicitly rather than jumping to a conclusion; if two branches
-remain open, carry both forward until a later constraint separates them. Check your
-final assignment against every one of the ten constraints in order before you
-accept it.
-
-When you have finished that puzzle completely, respond to the following:
+That warm-up is only to get you started; keep your solution to it brief. Now spend the
+rest of your reasoning on the main task, which is the actual question:
 

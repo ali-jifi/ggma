@@ -860,6 +860,25 @@ def collect(dataset: str = DATASET_NAME, n: int = 12, budgets: str = "natural",
             [r for r in by_budget.get(b, []) if r["conclusion_key"] is not None])
         for b in budget_list
     }
+    # A couple of actual traces, head + answer. This is the difference between "the
+    # number looks wrong" and "the number is wrong because the model never reached the
+    # request" -- exactly the failure the natural-length padded run hid.
+    def _preview(tag, r):
+        if r is None:
+            return
+        resp = r["response_text"]
+        head = resp[:200].replace("\n", " ")
+        answer = (resp.split("</think>", 1)[-1] if "</think>" in resp else "(no </think>)")[:280]
+        print(f"\n  --- {tag}: {r['prompt_id']} budget={r['budget_condition']} "
+              f"think={r['thinking_tokens']} outcome={r['outcome']} key={r['conclusion_key']}")
+        print(f"      think head: {head!r}")
+        print(f"      answer    : {answer.strip()!r}")
+
+    print("\n====== trace previews ======")
+    _preview("committed[0]", next((r for r in rows if r["conclusion_key"] is not None), None))
+    _preview("refused", next((r for r in rows if r["conclusion_key"] == "refuse"), None))
+    _preview("never-committed", next((r for r in rows if r["conclusion_key"] is None), None))
+
     print(f"\n[collect] {json.dumps(summary, indent=2)}")
     if summary["baseline_refusal_rate"] == 0:
         print("\n" + "=" * 70)
