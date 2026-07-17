@@ -1,0 +1,97 @@
+{
+  "pins": {
+    "harmbench": "8e1604d1171fe8a48d8febecd22f600e462bdcdd",
+    "advbench": "098262edf85f807224e70ecd87b9d83716bf6b73",
+    "alpaca": "761dc5bfbdeeffa89b8bff5d038781a4055f796a",
+    "xstest": "d7bb5bd738c1fcbc36edd83d5e7d1b71a3e2d84d",
+    "orbench": "e36d8b80e81837c8a8f264bbb2a49f1b32c7e272",
+    "sorrybench": "612a4e1f45db8adf884fa62318ddf9fa1c6e75e9"
+  },
+  "split_seed": 42,
+  "files": {
+    "advbench_all.json": {
+      "rows": 520,
+      "md5": "4aa2c2f061a6489abe7e40e506d5f416"
+    },
+    "advbench_extract.json": {
+      "rows": 260,
+      "md5": "755f2598dfcfd8a9a28c06920a2779e0"
+    },
+    "advbench_test.json": {
+      "rows": 260,
+      "md5": "7a63937135c7ca37ab953a29bfd9d93f"
+    },
+    "alpaca_all.json": {
+      "rows": 2000,
+      "md5": "e51d5a67ff2437ddc717b4971c1ab061"
+    },
+    "alpaca_extract.json": {
+      "rows": 1000,
+      "md5": "6f2ccb3f33e09d27f024096cc318af10"
+    },
+    "alpaca_test.json": {
+      "rows": 1000,
+      "md5": "240e1537ef70790469797ecf169e10c3"
+    },
+    "harmbench_all.json": {
+      "rows": 400,
+      "md5": "b2de318ac1a7e1fd1670c8f2d92fc4b3"
+    },
+    "harmbench_extract.json": {
+      "rows": 99,
+      "md5": "68a6839b703a2c8ad0b3c8d55b67b84f"
+    },
+    "harmbench_test.json": {
+      "rows": 101,
+      "md5": "e2302c4feabc25f59c60638c49c54024"
+    },
+    "orbench_all.json": {
+      "rows": 4000,
+      "md5": "b75dcb5c36ba19f3a8d543f43b6bb97c"
+    },
+    "orbench_extract.json": {
+      "rows": 2000,
+      "md5": "e7d291ac25d86f7cf123fc9851d07da8"
+    },
+    "orbench_hard_all.json": {
+      "rows": 1319,
+      "md5": "a3074561d55f87d98d8c737328f79fd8"
+    },
+    "orbench_hard_extract.json": {
+      "rows": 657,
+      "md5": "06e2d7dbd121db3caa667d3fc88a2ee9"
+    },
+    "orbench_hard_test.json": {
+      "rows": 662,
+      "md5": "3107586d10d7e99deef46a018e7f1f80"
+    },
+    "orbench_test.json": {
+      "rows": 2000,
+      "md5": "d6cf57243399d0dc7d163d0e9e399a04"
+    },
+    "sorrybench_all.json": {
+      "rows": 440,
+      "md5": "fda0a0ef32ea1801aff4345302e66618"
+    },
+    "sorrybench_extract.json": {
+      "rows": 220,
+      "md5": "f81b97ee0c5a9a15e4c84b6ce5a40624"
+    },
+    "sorrybench_test.json": {
+      "rows": 220,
+      "md5": "c669c9970cae4577514e6564478a1c9f"
+    },
+    "xstest_all.json": {
+      "rows": 250,
+      "md5": "f851c6f436c0a8e7e3d1e083a90aea41"
+    },
+    "xstest_extract.json": {
+      "rows": 120,
+      "md5": "167d99633ad922c1413cdf5f7bc67c70"
+    },
+    "xstest_test.json": {
+      "rows": 130,
+      "md5": "23a3ab8bb679c93fd0911ef822b23e12"
+    }
+  }
+}

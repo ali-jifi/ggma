@@ -15,7 +15,8 @@ with the harmful-vs-benign sign handled).
 
 | File | What it is |
 |---|---|
-| `fetch_datasets.py` | Fetches HarmBench, SORRY-Bench, AdvBench and Alpaca from their own repos at **pinned commits**, applies our seeded extraction/test splits, writes `data/` + `MANIFEST.json` (SHAs, seed, per-file md5). SORRY-Bench is gated — see `DATASET_SOURCES.md`. The benign-control arm (XSTest / OR-Bench) is **not built**. |
+| `fetch_datasets.py` | Fetches HarmBench, SORRY-Bench, AdvBench, Alpaca, XSTest and OR-Bench from their own repos at **pinned commits**, applies our seeded extraction/test splits, and writes `data/` (git-ignored) + `../MANIFEST.json` (SHAs, seed, per-file md5). SORRY-Bench is gated — see `DATASET_SOURCES.md`. `--check` verifies `data/` against the manifest. |
+| `MANIFEST.json` | *(one level up, in `safety/vendor/`)* The **committed** reference the data is checked against: pins, split seed, row counts, per-file md5. Deliberately outside the git-ignored `data/` — inside it, `--check` would only compare the data against a manifest the same fetch had just written, and no two machines could verify they built identical data. A `git diff` here means the data changed, which means every downstream number changed. |
 | `DATASET_SOURCES.md` | What each set is, the role the research proposal assigns it, licensing, and the known method gap. **Read this first.** |
 | `harmbench_judge.py` | Substring refusal check + `LLAMA2_CLS_PROMPT` + per-category ASR aggregation, with the HarmBench classifier injected as `judge_fn` (no vLLM, no Together). Three upstream origins — see its header. |
 | `licenses/` | Full license texts for every upstream whose code or data we touch. |

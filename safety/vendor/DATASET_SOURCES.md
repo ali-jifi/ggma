@@ -112,7 +112,9 @@ Splits are stratified by category. Category sizes are very uneven (OR-Bench hard
 | `alpaca_*` | 2000 / 1000 / 1000 | Sampled from Alpaca's 31,323 `input == ""` rows. Only `_extract` is read (Control 4). |
 | `sorrybench_*` | 440 / 220 / 220 | 44 categories x 10, category **names** resolved from `meta_info.py`. **Gated** — see below. |
 
-XSTest and OR-Bench are **not fetched** — see "Benign controls: not built".
+`xstest_*` (250 / 120 / 130, SAFE half only), `orbench_*` (4000 / 2000 / 2000, stratified
+from the 80k) and `orbench_hard_*` (1319 / 657 / 662) are fetched too — see the benign rows
+in the roles table above. The *matched benign run* remains unbuilt (below); the data does not.
 
 `harmbench_all.json` keeps the `copyright` and `contextual` behaviors even though only
 `standard` is scored: copyright behaviors need HarmBench's separate copyright classifier,
@@ -238,8 +240,29 @@ angles, transfer magnitude, bidirectional transfer) are Phase 2+ and out of Task
 ## What the extraction step is — and the two things it is not
 
 `app.py::_load_or_extract_direction` computes a harmful-vs-harmless difference-in-means at
-the last prompt token, then ablates it. **That is the Arditi refusal-direction replication
-— Stage 1.** Two conditions exist, `baseline` and `ablation`. That is all it is.
+the last prompt token, then ablates it. **That is the Arditi refusal-direction replication.**
+Two conditions exist, `baseline` and `ablation`. That is all it is.
+
+**It is not task 1.0b, and do not call it "Stage 1".** That label used to sit on this
+paragraph and it collides with `MASTER_TEAM_HANDOFF.md`'s Stage 1 (safety), which is a
+*different experiment*: "confirm refusal **erodes under long reasoning** on this model"
+(phase doc **1.0b**). The two share no axis —
+
+| | this extraction | task 1.0b |
+|---|---|---|
+| axis | baseline vs ablation | refusal rate vs **thinking tokens** |
+| budgets | one, natural | the sweep (256 … 16384) |
+| answers | "does ablating the direction raise ASR?" | "does refusal erode as reasoning lengthens?" |
+
+The proposal keeps them apart in one paragraph (§6): "**Before any intervention** we
+reproduce the accuracy-versus-length and refusal-versus-length curves to confirm both
+phenomena exist in our model" … "**As method baselines** we build on refusal-direction
+ablation [7]." This code is the second sentence. It has no length axis, so it cannot
+produce 1.0b's curve, and 1.0b gates task 0.5, which gates all trace-pile generation.
+
+Where this replication *does* count: as a **method baseline** (proposal §6), and as the
+raw material for phase-doc **4.5** / handoff **Control 4** — the static Arditi refusal
+direction the safety-drift direction must be shown geometrically distinct from.
 
 It is **not the drift subspace**, which is a different object built later from **within-trace
 contrasts** (refuse-early versus comply-late). For that one the proposal says harmless

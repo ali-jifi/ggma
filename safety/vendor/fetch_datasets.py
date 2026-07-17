@@ -59,6 +59,21 @@ from pathlib import Path
 VENDOR_DIR = Path(__file__).resolve().parent
 DATA_DIR = VENDOR_DIR / "data"
 
+# The manifest lives OUTSIDE data/ and IS committed, while the data itself is not.
+# That split is the whole point. The data is regenerable from PINS + SPLIT_SEED, so
+# committing it would redistribute prompts we have no licence to redistribute
+# (SORRY-Bench forbids it outright; Alpaca is CC BY-NC). But "regenerable" is a claim
+# about determinism, and the manifest is the only thing that can check it: it is the
+# reference a rebuild is compared AGAINST.
+#
+# Kept inside data/ (git-ignored) it could not do that job. `--check` would compare
+# the data against a manifest the same fetch had just written -- true by construction
+# -- and nobody could verify that two machines built identical data. Tracked, a
+# re-fetch whose upstream moved shows up as a `git diff` on this file, which is the
+# actual drift signal.
+MANIFEST_PATH = VENDOR_DIR / "MANIFEST.json"
+_LEGACY_MANIFEST = DATA_DIR / "MANIFEST.json"   # pre-move location; read, never written
+
 # Pinned upstream revisions. Every raw URL otherwise points at a moving branch, so an
 # upstream revision would move our numbers with no diff in this repo. Bump deliberately.
 PINS = {
@@ -371,11 +386,35 @@ def _manifest():
 
 
 def check():
-    mpath = DATA_DIR / "MANIFEST.json"
+    """Verify ./data against the COMMITTED manifest — the reference, not a mirror.
+
+    A mismatch means your data is not the data the manifest describes. Either the
+    build is stale (re-fetch), or an upstream pin moved content under a fixed
+    revision, or someone edited data/ by hand. Any of those silently changes every
+    number downstream, so this exits non-zero rather than reporting it as news.
+    """
+    mpath = MANIFEST_PATH if MANIFEST_PATH.exists() else _LEGACY_MANIFEST
     if not mpath.exists():
-        print("No data/MANIFEST.json — run `python fetch_datasets.py` first.", file=sys.stderr)
+        print(f"No {MANIFEST_PATH.name} — run `python fetch_datasets.py` first.",
+              file=sys.stderr)
         return 1
+    if mpath == _LEGACY_MANIFEST:
+        print(f"NOTE: reading the legacy manifest at {mpath} (inside the git-ignored "
+              f"data/). Re-run the fetcher to write {MANIFEST_PATH.name}, and commit it.")
+
     want, have, ok = json.loads(mpath.read_text()), _manifest(), True
+    if want.get("pins") != PINS:
+        moved = {k: (want.get("pins", {}).get(k), v) for k, v in PINS.items()
+                 if want.get("pins", {}).get(k) != v}
+        print(f"  PINS DIFFER from the manifest: {moved}")
+        print("  -> the manifest describes a different upstream revision than this script "
+              "pins. Re-fetch, and commit the manifest diff deliberately.")
+        ok = False
+    if want.get("split_seed") != SPLIT_SEED:
+        print(f"  SPLIT_SEED differs: manifest {want.get('split_seed')} vs {SPLIT_SEED} "
+              "— every extract/test half moved, so every reported number moved")
+        ok = False
+
     for name, meta in want["files"].items():
         got = have["files"].get(name)
         if got is None:
@@ -386,6 +425,11 @@ def check():
             ok = False
         else:
             print(f"  ok       {name}  ({meta['rows']} rows)")
+    extra = sorted(set(have["files"]) - set(want["files"]))
+    for name in extra:
+        print(f"  UNTRACKED  {name} (on disk, absent from the manifest)")
+        ok = False
+
     print("data matches the manifest" if ok else "data does NOT match the manifest")
     return 0 if ok else 1
 
@@ -411,9 +455,13 @@ def main():
             failed[name] = f"{type(e).__name__}: {e}"
             print(f"  {name}: FAILED — {type(e).__name__}: {e}")
 
-    (DATA_DIR / "MANIFEST.json").write_text(json.dumps(_manifest(), indent=2))
-    print(f"\nWrote {DATA_DIR}/MANIFEST.json")
+    MANIFEST_PATH.write_text(json.dumps(_manifest(), indent=2) + "\n")
+    if _LEGACY_MANIFEST.exists():
+        _LEGACY_MANIFEST.unlink()      # one manifest, and it is the tracked one
+    print(f"\nWrote {MANIFEST_PATH}")
     print("Data is git-ignored by design — re-run this script instead of committing it.")
+    print(f"{MANIFEST_PATH.name} IS tracked: `git diff` it. A change there means the data "
+          "changed, which means every downstream number changed. Commit it deliberately.")
     for name, msg in failed.items():
         print(f"\n--- {name} ---{msg}")
     return 1 if (args.only and failed) else 0
