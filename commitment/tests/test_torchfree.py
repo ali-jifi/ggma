@@ -136,6 +136,34 @@ def test_curve_metrics():
     assert ok
 
 
+def test_math_latex_matcher():
+    from matchers.math_latex_matcher import Math500Matcher, extract_boxed, normalize_math_answer
+    m = Math500Matcher()
+    # brace-balanced extraction: the GSM8K [^}]* regex truncates this
+    assert extract_boxed(r"so \boxed{\frac{\pi}{2}} done") == r"\frac{\pi}{2}"
+    assert extract_boxed(r"\boxed{\left( 3, \frac{\pi}{2} \right)}") \
+        == r"\left( 3, \frac{\pi}{2} \right)"
+    assert extract_boxed("no box here") is None
+    assert extract_boxed(r"\boxed{unbalanced") is None
+    # commas in tuples survive; (1,2) and (12) must not collide
+    assert normalize_math_answer("(1,2)") != normalize_math_answer("(12)")
+    assert normalize_math_answer(r"\left( 3, \frac{\pi}{2} \right)") \
+        == r"(3,\frac{\pi}{2})"
+    # numeric answers behave exactly like GSM8K (thousand-sep stripped)
+    assert normalize_math_answer("1,234") == "1234"
+    assert normalize_math_answer("116") == "116"
+    # frac shorthand canonicalizes
+    assert normalize_math_answer(r"\frac12") == normalize_math_answer(r"\frac{1}{2}")
+    # matcher/gold consistency: same string through match() and outcome()
+    comp = r"<think>...</think>The answer is \boxed{\left( 3, \frac{\pi}{2} \right)}."
+    key = m.match(comp)
+    assert key == r"(3,\frac{\pi}{2})"
+    assert m.outcome(key, r"\left( 3, \frac{\pi}{2} \right)") == "correct"
+    assert m.outcome(key, "(1,2)") == "incorrect"
+    # R5-adjacent: no </think> never matches
+    assert m.match(r"unclosed \boxed{42}") is None
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

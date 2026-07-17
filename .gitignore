@@ -8,3 +8,19 @@ commitment/outputs/traces/*.jsonl
 commitment/outputs/activations/*.npz
 commitment/outputs/figures/
 commitment/outputs/*_report.json
+commitment/outputs/calibrations/*.json
+
+# fetched benchmark data -- NEVER committed: fetched from canonical upstreams at
+# pinned commits (safety/vendor/fetch_datasets.py); SORRY-Bench's licence
+# forbids redistribution outright. Root-level so it holds on every branch.
+safety/vendor/data/
+
+# run logs + scratch from local/cloud collection runs (a100_run.sh etc.)
+run*.log
+nohup.out
+BANKED/
+do_not_track/
+
+# tool caches
+.pytest_cache/
+.ruff_cache/

@@ -30,8 +30,13 @@ sys.path.insert(0, str(REPO_ROOT))
 
 def build_matcher(args):
     if args.domain == "math":
+        if args.math_dataset == "math500":
+            # LaTeX answers need brace-balanced \boxed extraction + latex norm;
+            # the GSM8K matcher mirrors frozen harness logic and must not drift.
+            from matchers.math_latex_matcher import Math500Matcher
+            return Math500Matcher()
         from matchers.gsm8k_matcher import GSM8KMatcher
-        return GSM8KMatcher()
+        return GSM8KMatcher()  # gsm8k and aime are numeric-answer sets
     from matchers.refusal_matcher import RefusalMatcher, load_classifier
     if not args.classifier:
         raise SystemExit("safety domain needs --classifier module:callable "
@@ -42,9 +47,14 @@ def build_matcher(args):
 
 def load_prompts(args):
     if args.domain == "math":
-        from data.load_gsm8k import load_gsm8k
-        return load_gsm8k(n=args.n, seed=args.seed, local_path=args.local_gsm8k,
-                          split_filter=None if args.split == "all" else args.split)
+        split_filter = None if args.split == "all" else args.split
+        if args.math_dataset == "gsm8k":
+            from data.load_gsm8k import load_gsm8k
+            return load_gsm8k(n=args.n, seed=args.seed, local_path=args.local_gsm8k,
+                              split_filter=split_filter)
+        from data.load_math_hf import load_math_hf
+        return load_math_hf(args.math_dataset, n=args.n, seed=args.seed,
+                            split_filter=split_filter)
     from data.load_harmbench import load_harmbench
     if not args.harmbench:
         raise SystemExit("safety domain needs --harmbench <path>")
@@ -92,6 +102,10 @@ def main():
     ap.add_argument("--short-budget", default=None)
     ap.add_argument("--long-budget", default=None)
     # math data
+    ap.add_argument("--math-dataset", default="gsm8k",
+                    choices=["gsm8k", "math500", "aime"],
+                    help="math prompt source; math500/aime are the hard sets "
+                         "that produce low-commitment calibration mass")
     ap.add_argument("--local-gsm8k", default=None)
     # safety data
     ap.add_argument("--harmbench", default=None)
@@ -101,6 +115,10 @@ def main():
     ap.add_argument("--classifier", default=None, help="module:callable")
     ap.add_argument("--classifier-version", default="unversioned")
     ap.add_argument("--out", default=None)
+    ap.add_argument("--fresh", action="store_true",
+                    help="delete an existing --out and start over; default is to "
+                         "RESUME it, skipping (prompt, budget, sample) cells "
+                         "already present (kill-safe: rerun the same command)")
     args = ap.parse_args()
 
     from harness import compute_cell_stats, load_traces, save_trace_row
@@ -117,6 +135,22 @@ def main():
     act_dir = ROOT / "outputs" / "activations"
     act_dir.mkdir(parents=True, exist_ok=True)
 
+    # Resume-by-cell: a row is atomic (save_trace_row appends per sample), so a
+    # rerun after a kill must skip cells already on disk -- both to avoid
+    # duplicates (append mode!) and so the retry only redoes the in-flight cell.
+    done_cells = set()
+    if out_path.exists():
+        if args.fresh:
+            out_path.unlink()
+        else:
+            done_cells = {
+                (r["prompt_id"], str(r["budget_condition"]), r.get("sample_idx", 0))
+                for r in load_traces(str(out_path))
+            }
+            if done_cells:
+                print(f"[run] resuming {out_path.name}: {len(done_cells)} cells "
+                      f"already done, skipping them (--fresh to start over)")
+
     attn = args.attn or ("eager" if args.layer2 else "sdpa")
     if args.layer2 and attn != "eager":
         raise SystemExit("--layer2 requires eager attention; drop --attn sdpa")
@@ -129,6 +163,8 @@ def main():
     for p in prompts:
         for budget in args.budgets:
             for s in range(args.samples):
+                if (p["prompt_id"], str(budget), s) in done_cells:
+                    continue
                 tr = collect_trace(
                     model, tok, meta, p, matcher,
                     domain=args.domain, budget_condition=budget,
