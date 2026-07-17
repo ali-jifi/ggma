@@ -10,7 +10,7 @@ import time
 import uuid
 
 import harness as H
-from matchers.base import scorer_version, to_match_fn
+from matchers.base import agreement_rate, scorer_version, to_match_fn
 
 
 def _generate(model, tok, prompt_text, budget_condition, decode_temp, decode_top_p,
@@ -37,12 +37,17 @@ def collect_trace(model, tok, model_meta, prompt, matcher, *,
                   rollout_max_new_tokens=4096, store_rollout_texts=False,
                   layer2=False, attn_layers=None, anchor_policy="most_recent_anchor",
                   attn_norm_method="per_token_mean", sink_exclude_k=4,
-                  split="extraction", sample_idx=0, n_samples_per_cell=1):
+                  split="extraction", sample_idx=0, n_samples_per_cell=1,
+                  cross_matcher=None):
     """Run one generation + its commitment curve; return a Trace (surface+metric
     stage, i.e. Layer 1 populated; Layer 2 populated iff layer2=True).
 
     prompt: dict from data.load_* (needs prompt_id, prompt_text, gold; safety
     also anchor_text/induction/preamble_id). matcher: a ConclusionMatcher.
+
+    n_rollouts=0 skips Layer 1 entirely -> a SURFACE row (no curve). See below.
+    cross_matcher: optional second ConclusionMatcher; its agreement with `matcher`
+    over this trace's rollouts is recorded as Trace.matcher_agreement_rate.
     """
     t0 = time.time()
     prompt_text = prompt["prompt_text"]
@@ -99,7 +104,13 @@ def collect_trace(model, tok, model_meta, prompt, matcher, *,
         tr.scorer_confidence = matcher.last_confidence
 
     # --- Layer 1: truncation + free rollout (THE commitment definition) ---
-    if parent_key is not None:
+    # n_rollouts=0 is the SURFACE pass: generation + outcome, no curve. Layer 1 is
+    # ~90% of a trace's cost (max_prefixes x n_rollouts extra generations per trace),
+    # and the questions that only need `outcome` -- baseline refusal rate, the
+    # refusal-vs-length erosion curve (task 1.0b), cell-level flip stats -- do not
+    # read a single rollout field. compute_cell_stats keys on outcome and budget
+    # alone. Rows from this pass validate at stage="surface", not "metric".
+    if parent_key is not None and n_rollouts > 0:
         positions = H.choose_prefix_positions(
             tok, full_ids, think_start, think_end,
             policy=prefix_policy, max_prefixes=max_prefixes,
@@ -122,6 +133,13 @@ def collect_trace(model, tok, model_meta, prompt, matcher, *,
             tr.rollout_decode_temp = decode_temp
             tr.rollout_decode_top_p = decode_top_p
             tr.rollout_seed = seed
+            # Group 1: agreement between the scorer of record and a cross-check
+            # matcher, over the rollouts this trace already generated. Free -- the
+            # texts exist; without store_rollout_texts they are decoded and thrown
+            # away. refusal_matcher.py designates the heuristic for this field.
+            if cross_matcher is not None and texts:
+                flat = [t for prefix in texts for t in prefix]
+                tr.matcher_agreement_rate = agreement_rate(matcher, cross_matcher, flat)
 
     # --- Layer 2: sink-corrected attention-to-anchor proxy (optional) ---
     if layer2 and parent_key is not None:
