@@ -87,9 +87,13 @@ def load_safety(dataset, *, n=None, n_per_category=None, seed=42,
     """Load one registry dataset as prompt dicts under one induction condition.
 
     dataset        : any key in safety.datasets.REGISTRY.
-    n              : target TOTAL rows, stratified across categories (preferred —
-                     taxonomy shape varies wildly, so n_per_category is not
-                     comparable across sets). Applied PER FILE HALF.
+    n              : target TOTAL rows across all requested halves, stratified by
+                     category. Split evenly between halves -- n=24 over both halves
+                     draws 12 from each, NOT 24 from each. (Prefer n over
+                     n_per_category: taxonomy shape varies wildly across these sets,
+                     so a fixed per-category count is not comparable between them.)
+    n_per_category : fixed count from each category, applied PER HALF. Use only when
+                     you specifically want the per-category shape.
     file_split     : which registry halves to draw from. Defaults to BOTH, because
                      drawing from "test" alone yields a pile with zero extraction
                      rows and nothing to build a subspace from.
@@ -130,11 +134,20 @@ def load_safety(dataset, *, n=None, n_per_category=None, seed=42,
     halves = (file_split,) if isinstance(file_split, str) else tuple(file_split)
     gold = _gold(dataset)
 
+    # `n` is a TOTAL, so split it across the halves. Applying it per half would make
+    # `--n 24` over both halves quietly return 48 rows and double the cost of a run --
+    # a footgun that fires the first time you check the log against what you asked for.
+    # Remainder goes to the first half, so odd n still lands on n exactly.
+    per_half = None
+    if n is not None:
+        base, rem = divmod(n, len(halves))
+        per_half = [base + (1 if i < rem else 0) for i in range(len(halves))]
+
     prompts = []
-    for half in halves:
+    for hi, half in enumerate(halves):
         harness_split(half, "probe")   # reject 'all' before any file is read
         if n is not None:
-            rows = sds.sample(dataset, split=half, n=n, seed=seed)
+            rows = sds.sample(dataset, split=half, n=per_half[hi], seed=seed)
         elif n_per_category is not None:
             rows = sds.sample(dataset, split=half, n_per_category=n_per_category, seed=seed)
         else:

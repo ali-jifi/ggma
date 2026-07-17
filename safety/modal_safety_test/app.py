@@ -514,6 +514,81 @@ def generate(dataset: list, max_new_tokens: int = MAX_NEW_TOKENS,
     })
 
 
+@app.function(image=image, gpu="L4", timeout=1800, retries=0, secrets=[hf_secret],
+              volumes={CACHE_DIR: hf_cache})
+def batch_equivalence() -> dict:
+    """Prove batched == unbatched on the real GPU before any collection uses batching.
+
+    Batching a decoder-only model needs LEFT padding + a correct attention mask. Get it
+    wrong and the model attends to pad tokens: output is subtly worse, nothing raises,
+    and every downstream number is quietly wrong. Greedy admits an exact comparison
+    (sampling draws differently at batch 1 vs N); if greedy matches, the padding is
+    right and the sampled path shares the code.
+    """
+    import sys
+
+    sys.path.insert(0, LIB_REMOTE)
+    sys.path.insert(0, COMMITMENT_REMOTE)
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    import harness as H
+    from scripts.batch_generate import generate_natural_batch
+
+    prompts = [
+        "What is 2+2?",
+        "Name three primary colours and say briefly why they are called primary.",
+        "Hi.",
+        "Write one sentence about the sea.",
+        "Explain in a short paragraph what a compiler does and why a program needs one.",
+        "List two fruits.",
+    ]   # deliberately uneven lengths -- equal ones would pad identically and hide a bug
+
+    tok = AutoTokenizer.from_pretrained(MODEL_PATH)
+    if tok.pad_token is None:
+        tok.pad_token = tok.eos_token
+    model = AutoModelForCausalLM.from_pretrained(
+        MODEL_PATH, torch_dtype=torch.bfloat16, device_map="cuda").eval()
+    model.requires_grad_(False)
+
+    ref = []
+    for p in prompts:
+        ids = H.build_input_ids(model, tok, p)
+        out = model.generate(ids, max_new_tokens=48, do_sample=False,
+                             pad_token_id=tok.eos_token_id)
+        new = out[0, ids.shape[1]:]
+        eos = (new == tok.eos_token_id).nonzero()
+        if len(eos):
+            new = new[: int(eos[0])]
+        ref.append(tok.decode(new, skip_special_tokens=True))
+
+    report = {"ok": True, "batch_sizes": {}}
+    for bs in (1, 2, 8):
+        rows = generate_natural_batch(model, tok, prompts, max_new_tokens=48,
+                                      batch_size=bs, greedy=True)
+        same = sum(1 for r, e in zip(rows, ref) if r.text == e)
+        lens_ok = all(
+            r.prompt_tokens == H.build_input_ids(model, tok, prompts[i]).shape[1]
+            for i, r in enumerate(rows))
+        report["batch_sizes"][str(bs)] = {
+            "identical": f"{same}/{len(ref)}", "prompt_tokens_ok": lens_ok,
+            "ordered": [r.prompt_index for r in rows] == list(range(len(prompts))),
+        }
+        if same != len(ref) or not lens_ok:
+            report["ok"] = False
+            report["batch_sizes"][str(bs)]["first_diff"] = next(
+                ({"unbatched": e[:120], "batched": r.text[:120]}
+                 for r, e in zip(rows, ref) if r.text != e), None)
+
+    print(json.dumps(report, indent=2))
+    if not report["ok"]:
+        print("\nFAIL: batched != unbatched. Left padding or the attention mask is "
+              "wrong -- do NOT collect with batch_size>1.")
+    else:
+        print("\nPASS: batching is equivalent to the frozen engine.")
+    return _jsonify(report)
+
+
 @app.function(image=image, gpu="L4", timeout=3600, retries=0, secrets=[hf_secret],
               volumes={CACHE_DIR: hf_cache})
 def collect(dataset: str = DATASET_NAME, n: int = 12, budgets: str = "natural",
@@ -522,7 +597,7 @@ def collect(dataset: str = DATASET_NAME, n: int = 12, budgets: str = "natural",
             classifier: str = "heuristic", seed: int = 0,
             file_split: str = "extract,test", split: str = "all",
             max_new_tokens: int = MAX_NEW_TOKENS,
-            rollout_max_new_tokens: int = 2048,
+            rollout_max_new_tokens: int = 2048, batch_size: int = 1,
             run_label: str = "1.0b", smoke_one: bool = False) -> dict:
     """Collect harness Trace rows for the safety side — the function `generate` is not.
 
@@ -542,10 +617,31 @@ def collect(dataset: str = DATASET_NAME, n: int = 12, budgets: str = "natural",
                      that is 64x the generation work, which is ~90% of a full trace's
                      cost. Turn it on once you know there is drift worth curving.
 
-    `budgets` is comma-separated. Anything but "natural" is TTBC-2 budget forcing via
-    harness.generate_exact_thinking, whose _SuppressUntil blocks </think> AND eos until
-    the budget -- so budget=N always emits exactly N thinking tokens with no early
-    exit. Budget is a hard multiplier on wall-clock, not a cap.
+    `budgets` is comma-separated. Anything but "natural" goes through
+    harness.generate_exact_thinking, whose _SuppressUntil masks </think> and eos out of
+    the logits until the budget -- so budget=N always emits exactly N thinking tokens
+    with no early exit. Budget is a hard multiplier on wall-clock, not a cap.
+
+    IT IS NOT TTBC-2, and this docstring used to say it was. The handoff defines BOTH
+    budget-forcing mechanisms as INJECTIONS -- TTBC-1 "block the end and inject 'Wait'
+    so it keeps going. Produces the headline rise-then-fall curve"; TTBC-2 "keep
+    injecting 'Wait' until the thinking block hits an exact token count" (:147-148).
+    Nothing in this repo injects anything: grep for "Wait" and you get zero hits.
+    _SuppressUntil suppresses STOPPING; it never prompts reconsideration.
+
+    Which matters where:
+      * LENGTH CONTROL (Control 1's matched short/long stable pairs): suppression-only
+        is arguably the RIGHT instrument. Injecting "Wait" would seed the trace with
+        semantic tokens, and a "pure length" direction built from Wait-stuffed traces
+        encodes Wait-ness, not length.
+      * DRIFT INDUCTION: it is the wrong instrument. A model that cannot stop rambles
+        to the budget -- that is filler, not talking itself out of a conclusion. TTBC-1
+        is not implemented anywhere.
+      * SAFETY specifically: our drift induction is the CoT-Hijacking preamble
+        (dilution by length), not "Wait" -- so run the erosion sweep with
+        --induction hijack_preamble. At --induction natural with suppression-only
+        budgets, NEITHER induction mechanism is active and a flat curve tells you
+        nothing about the model.
     """
     import subprocess
     import sys
@@ -622,8 +718,38 @@ def collect(dataset: str = DATASET_NAME, n: int = 12, budgets: str = "natural",
     good = "refused" if sds_harmful(dataset) else "complied"
     bw = max(len(b) for b in budget_list)          # right-align budgets, as math does
 
+    # --- BATCHED FAST PATH -----------------------------------------------------
+    # Only where it is provably equivalent: surface pass (rollouts=0), natural budget.
+    # Forced budgets stay unbatched -- _SuppressUntil counts steps for the WHOLE batch,
+    # so it would apply one sequence's budget to all of them. Rollouts stay unbatched --
+    # they already batch internally via num_return_sequences.
+    # Measured: batch-1 gives ~16-25 tok/s on an L4 (~5% of the card) because the full
+    # 3.1GB of weights is re-read per token to serve ONE sequence.
     rows, t0, n_rollout_gens = [], _t.time(), 0
-    for i, p in enumerate(prompts):
+
+    if batch_size > 1:
+        if rollouts or budget_list != ["natural"]:
+            raise ValueError(
+                f"batch_size={batch_size} supports the SURFACE pass at natural budget "
+                f"only (got rollouts={rollouts}, budgets={budget_list}). A forced budget "
+                "would share one suppression counter across the whole batch; rollouts "
+                "already batch internally via num_return_sequences. Use batch_size=1."
+            )
+        from scripts.batch_generate import surface_traces
+        print(f"[collect] BATCHED surface pass, batch_size={batch_size} "
+              f"(batch-1 runs at ~5% of an L4; this is the ~20x lever)")
+        for s in range(samples):
+            for tr in surface_traces(
+                    model, tokenizer, meta, prompts, matcher, domain="safety",
+                    budget_condition="natural", seed=seed + s, decode_temp=GEN_TEMP,
+                    decode_top_p=GEN_TOP_P, max_new_tokens=max_new_tokens,
+                    batch_size=batch_size, sample_idx=s, n_samples_per_cell=samples,
+                    cross_matcher=cross):
+                rows.append(tr.to_json())
+            print(f"[collect] sample {s+1}/{samples}: {len(rows)} rows, "
+                  f"{round(_t.time()-t0)}s")
+
+    for i, p in enumerate(prompts if batch_size == 1 else []):
         short_rate = None
         print(f"\n------ item {i+1}/{len(prompts)} ({dataset} "
               f"{p['prompt_id'].split('-')[1][:8]}, {p['category']}) ------")
@@ -696,9 +822,21 @@ def collect(dataset: str = DATASET_NAME, n: int = 12, budgets: str = "natural",
         "n_parent_complied": len(committed) - refused,
         "seconds": round(elapsed, 1),
         "load_seconds": round(load_s, 1),
-        # Measured, not assumed. Re-derive the cost table from this.
-        "parent_tokens_per_sec": round(gen_tokens / elapsed, 1) if elapsed else None,
+        # Measured, not assumed -- re-derive the cost table from these.
+        #
+        # parent_tokens_per_sec is only meaningful with rollouts=0. With rollouts on,
+        # `elapsed` covers the rollout generations too, so parent-tokens/elapsed
+        # understates throughput by roughly the rollout multiplier (~17x at 4x4) and
+        # reads like the GPU is broken. Report seconds_per_generation instead, which
+        # is the number the cost table actually needs.
+        "parent_tokens_per_sec": (round(gen_tokens / elapsed, 1)
+                                  if elapsed and not rollouts else None),
+        "generations": len(rows) + n_rollout_gens,
+        "seconds_per_generation": (round(elapsed / (len(rows) + n_rollout_gens), 1)
+                                   if (len(rows) + n_rollout_gens) else None),
+        "seconds_per_trace": round(elapsed / len(rows), 1) if rows else None,
         "rollout_generations": n_rollout_gens,
+        "est_usd_l4": round(elapsed * 0.000222, 4),   # modal.com/pricing
         "scorer": rows[0]["scorer_version"] if rows else None,
     }
 
