@@ -451,7 +451,7 @@ def generate(dataset: list, max_new_tokens: int = MAX_NEW_TOKENS,
 
     t = time.time()
     model = AutoModelForCausalLM.from_pretrained(
-        model_path, torch_dtype=torch.bfloat16, device_map="cuda"
+        MODEL_PATH, torch_dtype=torch.bfloat16, device_map="cuda"
     ).eval()
     model.requires_grad_(False)
     load_s = time.time() - t
@@ -516,7 +516,7 @@ def generate(dataset: list, max_new_tokens: int = MAX_NEW_TOKENS,
 
 @app.function(image=image, gpu="L4", timeout=1800, retries=0, secrets=[hf_secret],
               volumes={CACHE_DIR: hf_cache})
-def batch_equivalence() -> dict:
+def batch_equivalence(model_path: str = "") -> dict:
     """Prove batched == unbatched on the real GPU before any collection uses batching.
 
     Batching a decoder-only model needs LEFT padding + a correct attention mask. Get it
@@ -544,11 +544,14 @@ def batch_equivalence() -> dict:
         "List two fruits.",
     ]   # deliberately uneven lengths -- equal ones would pad identically and hide a bug
 
-    tok = AutoTokenizer.from_pretrained(MODEL_PATH)
+    # Resolve ONCE and use for both tokenizer and weights. Loading a tokenizer and
+    # weights from different models yields degenerate output, not an error (2026-07-19).
+    model_path = model_path or MODEL_PATH
+    tok = AutoTokenizer.from_pretrained(model_path)
     if tok.pad_token is None:
         tok.pad_token = tok.eos_token
     model = AutoModelForCausalLM.from_pretrained(
-        MODEL_PATH, torch_dtype=torch.bfloat16, device_map="cuda").eval()
+        model_path, torch_dtype=torch.bfloat16, device_map="cuda").eval()
     model.requires_grad_(False)
 
     ref = []
@@ -696,7 +699,7 @@ def collect(dataset: str = DATASET_NAME, n: int = 12, budgets: str = "natural",
         tokenizer.pad_token = tokenizer.eos_token
     t = _t.time()
     model = AutoModelForCausalLM.from_pretrained(
-        MODEL_PATH, torch_dtype=torch.bfloat16, device_map="cuda"
+        model_path, torch_dtype=torch.bfloat16, device_map="cuda"
     ).eval()
     model.requires_grad_(False)
     load_s = _t.time() - t

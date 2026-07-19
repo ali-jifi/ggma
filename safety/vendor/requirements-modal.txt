@@ -5,16 +5,25 @@
 # transformers-stream-generator). What remains loads a HF causal-LM, runs harness.py
 # + steering_primitives.py, and the HarmBench classifier.
 #
-# transformers 4.44.2 covers the Qwen2-family debug/anchor models
-# (DeepSeek-R1-Distill-Qwen-1.5B/14B, DeepSeek-R1-Distill-Llama-8B/70B).
-# BUMP to transformers>=4.51 before running Qwen3-14B / Qwen3-30B-A3B (MoE).
+# transformers 4.53.0, bumped from 4.44.2 because Qwen3-1.7B / Qwen3-8B / Qwen3-30B-A3B
+# (the Stage B sweep) require >=4.51.
+#
+# HONEST SCOPE OF WHAT WAS TESTED (2026-07-19): an earlier comment here claimed the old
+# 4.44.2 pin was "verified false" for DeepSeek-R1-Distill-Llama-8B. That was WRONG and is
+# retracted. The gibberish that prompted it was a local bug -- app.py::collect loaded the
+# requested model's TOKENIZER but the hardcoded MODEL_PATH's WEIGHTS, so an "8B" run was
+# really 8B-tokenizer + 1.5B-weights. Symptom: degenerate single-token repetition, and a
+# load line reporting 28 layers / d=1536 (the 1.5B) under the 8B's name. Once fixed, the
+# 8B loads correctly (32 layers / d=4096) and refuses coherently ON THIS 4.53.0 PIN.
+# Whether it ALSO worked on 4.44.2 was never tested and is not claimed either way -- the
+# bump is justified by the Qwen3 requirement alone.
 
 # --- core: model + steering + harness ---
 torch==2.3.0
-transformers==4.44.2
-accelerate==0.31.0
-safetensors==0.4.3
-huggingface-hub==0.23.3
+transformers==4.53.0
+accelerate==1.8.1         # 0.31 is too old for transformers 4.53
+safetensors==0.5.3
+huggingface-hub==0.33.0   # transformers 4.53 needs >=0.30
 sentencepiece==0.2.0
 protobuf==5.27.1
 numpy==1.26.4           # harness.py
