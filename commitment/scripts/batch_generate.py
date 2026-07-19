@@ -81,6 +81,11 @@ def generate_natural_batch(model, tok, prompts: List[str], max_new_tokens=2048,
     decode is temp 0.6 / top_p 0.95.
     """
     rows: List[BatchRow] = []
+    # Loop-invariant, so hoisted. The union of every declared stop id (Qwen-family models
+    # declare several) plus the pad id, cut with the SAME rule the unbatched arm uses.
+    eos_ids = H.get_eos_ids(model, tok)
+    pad_id = H.get_pad_id(model, tok)
+    stop_ids = set(eos_ids) | {pad_id}
     for start in range(0, len(prompts), batch_size):
         chunk = prompts[start:start + batch_size]
         ids, mask = _encode(model, tok, chunk)
@@ -90,17 +95,17 @@ def generate_natural_batch(model, tok, prompts: List[str], max_new_tokens=2048,
             ids, attention_mask=mask, max_new_tokens=max_new_tokens,
             do_sample=not greedy,
             **({} if greedy else {"temperature": temperature, "top_p": top_p}),
-            pad_token_id=tok.eos_token_id,
+            pad_token_id=pad_id,
         )
         for i in range(len(chunk)):
             # Left padding => the generated region starts at the same index for every
             # sequence in the batch. The REAL prompt length is the unmasked count.
-            new_tokens = out[i, padded_len:]
-            # Trailing eos-as-pad: sequences that finished early are padded out to the
-            # longest one. Cut at the first eos so think/total counts are honest.
-            eos_at = (new_tokens == tok.eos_token_id).nonzero()
-            if len(eos_at):
-                new_tokens = new_tokens[: int(eos_at[0])]
+            # Cut at the first stop id OR pad: a sequence that finished early is padded
+            # out to the longest in the batch, and with SEVERAL stop ids (Qwen3 declares
+            # two) the one it actually stopped on need not be the one used as padding.
+            # Shared rule with the unbatched reference arm -- the whole value of the
+            # batch-equivalence proof is that both arms cut identically.
+            new_tokens = H.cut_at_first_stop(out[i, padded_len:], stop_ids)
             text = tok.decode(new_tokens, skip_special_tokens=True)
             real_prompt_len = int(mask[i].sum())
             rows.append(BatchRow(

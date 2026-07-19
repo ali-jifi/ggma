@@ -66,11 +66,11 @@ def main():
     for p in PROMPTS:
         ids = H.build_input_ids(model, tok, p)
         out = model.generate(ids, max_new_tokens=args.max_new_tokens, do_sample=False,
-                             pad_token_id=tok.eos_token_id)
-        new = out[0, ids.shape[1]:]
-        eos = (new == tok.eos_token_id).nonzero()
-        if len(eos):
-            new = new[: int(eos[0])]
+                             pad_token_id=H.get_pad_id(model, tok))
+        # Same cut rule as the batched arm (union of stop ids + pad).
+        new = H.cut_at_first_stop(
+            out[0, ids.shape[1]:],
+            set(H.get_eos_ids(model, tok)) | {H.get_pad_id(model, tok)})
         ref.append(tok.decode(new, skip_special_tokens=True))
 
     bad = 0

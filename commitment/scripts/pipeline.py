@@ -15,19 +15,27 @@ from matchers.base import agreement_rate, scorer_version, to_match_fn
 
 def _generate(model, tok, prompt_text, budget_condition, decode_temp, decode_top_p,
               seed, max_new_tokens):
-    """Dispatch natural vs. exact-thinking generation by budget_condition."""
+    """Dispatch natural vs. exact-thinking generation by budget_condition.
+
+    Returns a 6th value, `forcing`: (forcing_method, stop_stats). R6 -- under suppression
+    forcing thinking_tokens is the budget echoed back, so the row must carry a positive
+    marker for HOW it was forced plus the Control statistic, or a length curve built from
+    it is outcome-vs-the-number-we-typed-in.
+    """
     if str(budget_condition) == "natural":
-        text, think_tokens, margins, ent, seq = H.generate_natural(
+        text, think_tokens, margins, ent, seq, stop = H.generate_natural(
             model, tok, prompt_text, max_new_tokens=max_new_tokens,
             temperature=decode_temp, top_p=decode_top_p, seed=seed,
         )
+        forcing = ("none", stop)
     else:
         budget = int(budget_condition)
-        text, think_tokens, margins, ent, seq = H.generate_exact_thinking(
+        text, think_tokens, margins, ent, seq, stop = H.generate_exact_thinking(
             model, tok, prompt_text, thinking_budget=budget,
             temperature=decode_temp, top_p=decode_top_p, seed=seed,
         )
-    return text, think_tokens, margins, ent, seq
+        forcing = ("suppression", stop)
+    return text, think_tokens, margins, ent, seq, forcing
 
 
 def collect_trace(model, tok, model_meta, prompt, matcher, *,
@@ -51,7 +59,7 @@ def collect_trace(model, tok, model_meta, prompt, matcher, *,
     """
     t0 = time.time()
     prompt_text = prompt["prompt_text"]
-    text, think_tokens, margins, ent, seq = _generate(
+    text, think_tokens, margins, ent, seq, (forcing_method, stop_stats) = _generate(
         model, tok, prompt_text, budget_condition, decode_temp, decode_top_p,
         seed, max_new_tokens,
     )
@@ -74,6 +82,11 @@ def collect_trace(model, tok, model_meta, prompt, matcher, *,
         prompt_text=prompt_text,
         budget_condition=str(budget_condition),
         thinking_tokens=int(think_tokens),
+        # R6: the positive marker for HOW the length was produced, plus the Control
+        # statistic. stop_stats is None on the natural path (nothing was suppressed, so
+        # "did it want to stop" is not a separate question there).
+        forcing_method=forcing_method,
+        **(stop_stats or {}),
         response_text=text,
         conclusion_key=parent_key,
         final_answer=final_answer,   # deprecated mirror of conclusion_key

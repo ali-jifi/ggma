@@ -66,8 +66,16 @@ import torch
 import torch.nn.functional as F
 from transformers import LogitsProcessor
 
-HARNESS_VERSION = "0.3.0"
-SCHEMA_VERSION = "trace-v0.3"
+HARNESS_VERSION = "0.4.0"
+SCHEMA_VERSION = "trace-v0.4"
+
+# Split from HARNESS_VERSION because make_calibration_id() folds a version into every
+# calibration_id: without this split, a change to the GENERATION path -- which cannot
+# affect the Layer 2 attention proxy at all -- would invalidate every calibration Grace
+# has already fit. Bump this ONLY when something that actually changes a calibration
+# changes. The 0.3.0 -> 0.4.0 harness bump therefore leaves every calibration_id
+# byte-identical.
+CALIBRATION_VERSION = "0.3.0"
 
 # Declared in the schema but never populated yet: the shape estimator is not
 # agreed. Readers must treat these as absent, not as "no effect". Populate them
@@ -76,6 +84,10 @@ SCHEMA_PENDING_FIELDS = ("shape_bic_delta", "shape_max_drop")
 
 VALID_SPLITS = ("extraction", "selection", "heldout")
 VALID_INDUCTION = ("natural", "hijack_preamble")
+# How the reasoning length was produced. The POSITIVE marker every R6 rule keys on --
+# never infer forcing from budget_condition, because Stage C thinking-clipping is
+# non-natural yet never invokes _SuppressUntil and so legitimately has no stop_* stats.
+VALID_FORCING = ("none", "suppression", "clipping")
 VALID_ANCHOR_POLICY = ("first_anchor", "most_recent_anchor")
 VALID_ATTN_NORM = ("raw_mass", "per_token_mean")
 
@@ -127,6 +139,47 @@ class Trace:
     # v0.3: agreement between the scorer of record and a cross-check matcher.
     # Safety side only (classifier vs. heuristic); None when no cross-check ran.
     matcher_agreement_rate: Optional[float] = None
+
+    # v0.4: BUDGET-FORCING CONTROL (R6). Under suppression forcing, thinking_tokens is
+    # the budget by construction -- </think> and eos are masked for the whole block and
+    # the tag is pasted in afterwards -- so it is NOT a chosen length. These record what
+    # IS observable: how the row was forced, and whether the model tried to stop.
+    #
+    # forcing_method is the POSITIVE marker every rule keys on. Do NOT infer forcing from
+    # budget_condition: Stage C thinking-clipping is non-natural and never invokes
+    # _SuppressUntil, so it legitimately has no stop_* at all.
+    #   None          == not recorded (a pre-v0.4 row). validate_trace REJECTS this on a
+    #                    non-natural row -- those are exactly the rows whose
+    #                    thinking_tokens was never a measurement.
+    #   "none"        == natural decoding; thinking_tokens IS the model's chosen length
+    #   "suppression" == generate_exact_thinking; thinking_tokens == the budget
+    #   "clipping"    == the trace was cut and </think> pasted (Stage C); stop_* is None
+    forcing_method: Optional[str] = None
+    # Populated ONLY when forcing_method == "suppression". None == not measured.
+    # 0 != None: stop_wanted_steps_think == 0 means "measured, and it never tried to
+    # close the think block". Every consumer MUST filter on forcing_method before
+    # aggregating, or sum(r.get(..., 0)) dilutes the statistic toward 0 with natural rows.
+    stop_wanted_steps_think: Optional[int] = None   # suppressed steps where </think> was
+                                                    # the pre-warp argmax
+    stop_wanted_steps_eos: Optional[int] = None     # ... where an eos id was. Kept
+                                                    # SEPARATE: "wanted to close the think
+                                                    # block" and "wanted to end the turn"
+                                                    # are different events, and their
+                                                    # union is unrecoverable after the fact.
+    stop_wanted_first_step: Optional[int] = None    # first step either fired, 0-based
+                                                    # within the forced block
+    stop_prob_max: Optional[float] = None           # max softmax(logits/T) mass on the
+                                                    # stop tokens. UPPER BOUND: top_p is
+                                                    # not applied. An extreme-value stat --
+                                                    # saturates toward 1.0 as the budget
+                                                    # grows, so NOT comparable across
+                                                    # budgets. Use the rate instead.
+    stop_prob_final: Optional[float] = None         # same, at the last forced step
+                                                    # ("how much did it want out right
+                                                    # where we cut it")
+    stop_suppressed_steps: Optional[int] = None     # the DENOMINATOR. Storing it is what
+                                                    # makes stop_wanted_* comparable
+                                                    # across budget conditions.
 
     # ---- GROUP 2: flip / pairing. CELL-level, stamped onto rows by
     #      compute_cell_stats(). Never hand-set from a single run at temp 0.6.
@@ -216,6 +269,31 @@ def validate_trace(t: Trace, stage: str = "surface"):
         errs.append("math rows must have induction='natural'")
     if t.conclusion_key != t.final_answer:
         errs.append("final_answer must mirror conclusion_key (deprecated alias)")
+    # --- R6: budget-forcing Control. Gated on the POSITIVE forcing_method marker, never
+    # on budget_condition -- gating on the latter would reject every Stage C
+    # thinking-clipping row (the plan's recommended drift method) on the day it is written.
+    if t.forcing_method is not None and t.forcing_method not in VALID_FORCING:
+        errs.append(f"forcing_method must be one of {VALID_FORCING} or None, "
+                    f"got {t.forcing_method!r}")
+    if t.forcing_method is None and t.budget_condition != "natural":
+        # A pre-v0.4 forced row. These are exactly the rows whose thinking_tokens was
+        # never a measurement, so refusing them is the point.
+        errs.append(f"R6 violation: non-natural row (budget_condition="
+                    f"{t.budget_condition!r}) without forcing_method. Set 'suppression' "
+                    "or 'clipping'; thinking_tokens alone is the input echoed back.")
+    elif t.forcing_method == "suppression":
+        if t.stop_suppressed_steps is None:
+            errs.append("R6 violation: suppression-forced row without the Control "
+                        "statistic (stop_suppressed_steps)")
+        else:
+            wanted = (t.stop_wanted_steps_think or 0) + (t.stop_wanted_steps_eos or 0)
+            if wanted > t.stop_suppressed_steps:
+                errs.append("stop_wanted_steps exceeds stop_suppressed_steps")
+        if str(t.budget_condition).isdigit() and t.thinking_tokens != int(t.budget_condition):
+            # Bug 2 canary: an unsuppressed second eos id ends pass 1 early, silently
+            # shortening the block while the run still "succeeds".
+            errs.append(f"forced block is {t.thinking_tokens} tokens but budget is "
+                        f"{t.budget_condition}: a stop id escaped suppression")
     if stage in ("metric", "steered"):
         if not t.rollout_prefix_positions or not t.rollout_outcomes:
             errs.append("metric stage requires Layer 1 rollout fields (R1)")
@@ -266,6 +344,90 @@ def get_think_end_id(tokenizer):
         ids = tokenizer.encode("</think>", add_special_tokens=False)
         tid = ids[-1]
     return tid
+
+
+def get_eos_ids(model=None, tokenizer=None, *, for_suppression=True):
+    """Every id that could end generation, as a list[int]. FOR SUPPRESSION ONLY.
+
+    Budget forcing works by masking the stop tokens out of the logits until the budget.
+    Masking only tokenizer.eos_token_id is not enough -- Qwen-family models declare
+    SEVERAL stop ids in generation_config (<|im_end|> and <|endoftext|>), HF's stopping
+    criteria honours all of them, and the unmasked one lets the model stop early. That
+    failure is SILENT: generate_exact_thinking pastes </think> on afterwards, so
+    thinking_tokens still reports the budget you asked for.
+
+    WHY for_suppression IS KEYWORD-ONLY AND MUST STAY TRUE. Masking an extra id is
+    MONOTONE-SAFE: it can only prevent stopping, never cause it. Passing this union to
+    generate(eos_token_id=...) is the opposite -- it OVERRIDES generation_config and can
+    only make generation stop EARLIER, silently. The union is also wrong for that purpose
+    by construction: HF's authority is generation_config alone, which OVERRIDES
+    config.json when present, and that is exactly what a distill does. Handing a model
+    stop tokens its own generation config deliberately excluded shortens natural traces
+    -- the one path where thinking_tokens is a real measurement -- and perturbs
+    rollout_closure_rates, which is the R5 guard the commitment definition rests on.
+    """
+    if not for_suppression:
+        raise ValueError(
+            "get_eos_ids is for the suppression mask only. Do not pass it to "
+            "generate(eos_token_id=...): that overrides generation_config with a "
+            "superset and can only stop generation earlier, silently."
+        )
+    ids = []
+
+    def _add(v):
+        if v is None:
+            return
+        if torch.is_tensor(v):
+            for x in v.reshape(-1).tolist():
+                _add(x)
+            return
+        if isinstance(v, (list, tuple, set)):
+            for x in v:
+                _add(x)
+            return
+        if isinstance(v, bool) or not isinstance(v, int):
+            return          # strings / floats are not token ids; ignore, don't guess
+        if v >= 0 and v not in ids:
+            ids.append(v)
+
+    gen_cfg = getattr(model, "generation_config", None) if model is not None else None
+    _add(getattr(gen_cfg, "eos_token_id", None))
+    if model is not None:
+        _add(getattr(getattr(model, "config", None), "eos_token_id", None))
+    _add(getattr(tokenizer, "eos_token_id", None) if tokenizer is not None else None)
+
+    if not ids:
+        raise ValueError(
+            "no eos token id found on generation_config, config, or tokenizer; budget "
+            "forcing cannot suppress stopping and would silently under-run"
+        )
+    vocab = getattr(getattr(model, "config", None), "vocab_size", None)
+    if vocab is not None:
+        bad = [i for i in ids if i >= vocab]
+        if bad:
+            raise ValueError(f"eos ids {bad} out of range for vocab_size {vocab}")
+    return ids
+
+
+def get_pad_id(model=None, tokenizer=None):
+    """A SCALAR pad id for model.generate (which rejects a list here)."""
+    for v in (getattr(tokenizer, "pad_token_id", None) if tokenizer is not None else None,
+              getattr(getattr(model, "generation_config", None), "pad_token_id", None)):
+        if isinstance(v, int) and not isinstance(v, bool) and v >= 0:
+            return v
+    return get_eos_ids(model, tokenizer)[0]
+
+
+def cut_at_first_stop(new_tokens, stop_ids):
+    """Truncate a generated row at its first stop/pad id. ONE rule, shared by the batched
+    path and the unbatched reference arm -- the whole value of the batch-equivalence proof
+    is that both arms run the same rule, and they used to differ (batched cut on eos+pad,
+    reference on eos alone)."""
+    if not len(new_tokens):
+        return new_tokens
+    stops = torch.as_tensor(sorted({int(s) for s in stop_ids}), device=new_tokens.device)
+    hit = torch.isin(new_tokens, stops).nonzero()
+    return new_tokens[: int(hit[0])] if len(hit) else new_tokens
 
 
 def build_input_ids(model, tokenizer, prompt):
@@ -320,17 +482,86 @@ def _scores_to_margin_entropy(scores_tuple):
 # =============================================================================
 
 class _SuppressUntil(LogitsProcessor):
-    def __init__(self, token_ids, until):
-        self.token_ids = token_ids
+    """Blocks `token_ids` until `until` steps have passed, AND instruments the
+    suppression (v0.4).
+
+    WHY THE INSTRUMENTATION EXISTS. Under budget forcing the model cannot emit </think>,
+    so thinking_tokens is the budget echoed back, not an observation (R6). What IS
+    observable is whether the model TRIED to stop. At each suppressed step we read the
+    incoming scores BEFORE masking, split by WHICH stop token: "wanted to close the think
+    block" and "wanted to end the turn" are different events with different meanings for
+    the safety claim, and storing only their union is unrecoverable after the fact.
+
+    ORDERING. User-supplied logits_processor entries are merged in BEFORE the
+    Temperature/TopK/TopP warpers, so `scores` here are PRE-WARP logits. Verified
+    empirically on transformers 4.53.0; on the 4.44.2 the Modal image pins, _sample()
+    takes logits_warper as a separate argument applied after logits_processor, so the
+    conclusion holds by a different mechanism. A test asserts this rather than trusting
+    it: if a future version reorders, the argmax silently becomes the argmax of a
+    truncated distribution.
+
+    Temperature is strictly monotone and top_p only truncates, so the argmax we see is
+    the argmax the sampler would have seen. We divide by `temperature` ourselves so
+    stop_prob_* is on the sampling scale; top_p renormalisation is NOT applied, so
+    stop_prob_* is an UPPER bound on the true sampling probability. The ARGMAX statistic
+    is the conservative one and is the pre-registered Control; stop_prob_* is colour.
+    """
+
+    def __init__(self, token_ids, until, temperature=1.0, think_end_id=None):
+        self.token_ids = list(token_ids)
+        self.think_end_id = think_end_id if think_end_id is not None else (
+            self.token_ids[0] if self.token_ids else None)
         self.until = until
         self.step = 0
+        self.temperature = float(temperature) if temperature else 1.0
+        self.suppressed_steps = 0
+        self.stop_wanted_steps_think = 0
+        self.stop_wanted_steps_eos = 0
+        self.stop_wanted_first_step = None
+        self.stop_prob_max = 0.0
+        self.stop_prob_final = None
 
     def __call__(self, input_ids, scores):
         if self.step < self.until:
+            if scores.shape[0] != 1:
+                raise ValueError(
+                    "_SuppressUntil assumes batch size 1 (one shared step counter); "
+                    f"got {scores.shape[0]}. Batched budget forcing must track per-row "
+                    "state before it is used.")
+            # float32 CLONE, read before masking: argmax over fp16/bf16 logits can tie
+            # between </think> and a near-identical token and flip run-to-run, and
+            # .float() on an already-fp32 tensor returns self (which would alias what we
+            # are about to mask).
+            row = scores[0].detach().to(torch.float32).clone()
+            if bool(torch.isfinite(row).any()):
+                top = int(torch.argmax(row).item())
+                if top in self.token_ids:
+                    if top == self.think_end_id:
+                        self.stop_wanted_steps_think += 1
+                    else:
+                        self.stop_wanted_steps_eos += 1
+                    if self.stop_wanted_first_step is None:
+                        self.stop_wanted_first_step = self.step
+                p = torch.softmax(row / self.temperature, dim=-1)
+                mass = float(p[self.token_ids].sum().item())
+                self.stop_prob_max = max(self.stop_prob_max, mass)
+                self.stop_prob_final = mass
+            self.suppressed_steps += 1
             for t in self.token_ids:
                 scores[:, t] = -float("inf")
         self.step += 1
         return scores
+
+    def stats(self):
+        """None-safe dict; keys match the Trace field names."""
+        return {
+            "stop_wanted_steps_think": self.stop_wanted_steps_think,
+            "stop_wanted_steps_eos": self.stop_wanted_steps_eos,
+            "stop_wanted_first_step": self.stop_wanted_first_step,
+            "stop_prob_max": self.stop_prob_max,
+            "stop_prob_final": self.stop_prob_final,
+            "stop_suppressed_steps": self.suppressed_steps,
+        }
 
 
 @torch.no_grad()
@@ -350,7 +581,11 @@ def generate_natural(model, tokenizer, prompt, max_new_tokens=16384,
     text = tokenizer.decode(new_tokens, skip_special_tokens=True)
     margins, entropies = _scores_to_margin_entropy(out.scores)
     think_tokens = _count_thinking_tokens(tokenizer, new_tokens)
-    return text, think_tokens, margins, entropies, out.sequences
+    # 6th value is None, not {}: nothing was suppressed here, so "did it want to stop"
+    # is not a separate question -- thinking_tokens IS the model's chosen length on this
+    # path. None != 0, and every consumer must filter on forcing_method before
+    # aggregating or natural rows dilute the statistic toward zero.
+    return text, think_tokens, margins, entropies, out.sequences, None
 
 
 @torch.no_grad()
@@ -359,24 +594,39 @@ def generate_exact_thinking(model, tokenizer, prompt, thinking_budget,
                             seed=0):
     torch.manual_seed(seed)
     think_end_id = get_think_end_id(tokenizer)
-    eos_id = tokenizer.eos_token_id
+    # ALL stop ids, not just the tokenizer's: a Qwen3 declares several in
+    # generation_config and the unmasked one lets the model stop early -- silently,
+    # because </think> is pasted on below and thinking_tokens still reads as the budget.
+    eos_ids = get_eos_ids(model, tokenizer)
+    pad_id = get_pad_id(model, tokenizer)
     ids = build_input_ids(model, tokenizer, prompt)
     prompt_len = ids.shape[1]
 
-    supp = _SuppressUntil([think_end_id, eos_id], until=thinking_budget)
+    supp = _SuppressUntil([think_end_id] + eos_ids, until=thinking_budget,
+                          temperature=temperature, think_end_id=think_end_id)
     out1 = model.generate(
         ids, max_new_tokens=thinking_budget,
         do_sample=True, temperature=temperature, top_p=top_p,
-        logits_processor=[supp], pad_token_id=eos_id,
+        logits_processor=[supp], pad_token_id=pad_id,
         return_dict_in_generate=True, output_scores=True,
     )
+    # LOUD. This is what converts this class of bug from silent to fatal: without it the
+    # next model with an undeclared stop id reproduces the exact same short run, and
+    # thinking_tokens still reports the budget because the tag is pasted on below.
+    produced = out1.sequences.shape[1] - prompt_len
+    if produced < thinking_budget:
+        raise RuntimeError(
+            f"budget forcing under-ran: asked {thinking_budget} thinking tokens, got "
+            f"{produced}. A stop id escaped _SuppressUntil (suppressed="
+            f"{[think_end_id] + eos_ids}). Do NOT trust thinking_tokens on this row."
+        )
     seq1 = torch.cat(
         [out1.sequences, torch.tensor([[think_end_id]], device=model.device)], dim=1
     )
     out2 = model.generate(
         seq1, max_new_tokens=max_answer_tokens,
         do_sample=True, temperature=temperature, top_p=top_p,
-        pad_token_id=eos_id,
+        pad_token_id=pad_id,
         return_dict_in_generate=True, output_scores=True,
     )
     full = out2.sequences
@@ -385,7 +635,8 @@ def generate_exact_thinking(model, tokenizer, prompt, thinking_budget,
     m1, e1 = _scores_to_margin_entropy(out1.scores)
     m2, e2 = _scores_to_margin_entropy(out2.scores)
     think_tokens = _count_thinking_tokens(tokenizer, new_tokens)
-    return text, think_tokens, list(m1) + list(m2), list(e1) + list(e2), full
+    return (text, think_tokens, list(m1) + list(m2), list(e1) + list(e2), full,
+            supp.stats())
 
 
 # =============================================================================
@@ -759,7 +1010,10 @@ def apply_isotonic(fit, x_new):
 
 def make_calibration_id(domain, layer, anchor_policy, norm_method,
                         steering_condition, n_points):
-    payload = f"{domain}|{layer}|{anchor_policy}|{norm_method}|{steering_condition}|{n_points}|{HARNESS_VERSION}"
+    # CALIBRATION_VERSION, not HARNESS_VERSION: a change to the generation path cannot
+    # affect the attention proxy, and folding the harness version in here would
+    # invalidate every existing calibration for an unrelated bump.
+    payload = f"{domain}|{layer}|{anchor_policy}|{norm_method}|{steering_condition}|{n_points}|{CALIBRATION_VERSION}"
     return "cal_" + hashlib.sha256(payload.encode()).hexdigest()[:10]
 
 

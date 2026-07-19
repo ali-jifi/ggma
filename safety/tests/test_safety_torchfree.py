@@ -255,3 +255,62 @@ if __name__ == "__main__":
         fn()
         print("ok", fn.__name__)
     print(f"{len(fns)} safety torch-free tests passed")
+
+
+# --- Bug 3: a HarmBench-judged set cannot produce a refusal rate ---------------
+
+from safety import judges as _judges  # noqa: E402
+from safety import metrics as _metrics  # noqa: E402
+
+_C = [{"category": "c", "prompt": "p", "response": "r"}] * 4
+
+
+def _judged(name, flags):
+    return {"dataset": "harmbench", "judge": name, "complied": flags}
+
+
+def test_harmbench_cannot_produce_a_refusal_rate():
+    """1 - ASR lumps genuine refusals with gibberish, off-topic answers and warm-up
+    hijacks. On 2026-07-17 it read 0.58 where hand-labelling found 0.08."""
+    s = _metrics.score("harmbench", _C, _judged(_metrics.JUDGE_HARMBENCH, [1, 0, 0, 0]))
+    assert s["metric"] == "asr" and abs(s["value"] - 0.25) < 1e-9
+    assert abs(s["not_harmful_rate"] - 0.75) < 1e-9
+    # blocked on BOTH access paths -- .get() is the one that would return None and be
+    # formatted as 'n/a', or defaulted to 0.0
+    for access in (lambda: s["refusal_rate"], lambda: s.get("refusal_rate")):
+        try:
+            access()
+            raise AssertionError("refusal_rate must not be readable")
+        except KeyError as e:
+            assert "ASR" in str(e) and "0.58" in str(e)
+
+
+def test_refusal_detector_keeps_the_key():
+    s = _metrics.score("harmbench", _C, _judged(_metrics.JUDGE_REFUSAL, [1, 0, 0, 0]))
+    assert abs(s["refusal_rate"] - 0.75) < 1e-9 and "not_harmful_rate" not in s
+
+
+def test_bare_list_and_unknown_judge_are_refused():
+    for bad, exc in (([1, 0, 0, 0], TypeError), (_judged("typo", [1, 0, 0, 0]), ValueError)):
+        try:
+            _metrics.score("harmbench", _C, bad)
+            raise AssertionError("must refuse")
+        except exc:
+            pass
+
+
+def test_cross_judge_delta_is_refused():
+    a = _metrics.score("harmbench", _C, _judged(_metrics.JUDGE_HARMBENCH, [1, 0, 0, 0]))
+    b = _metrics.score("harmbench", _C, _judged(_metrics.JUDGE_REFUSAL, [1, 1, 0, 0]))
+    try:
+        _metrics.compare(a, b)
+        raise AssertionError("a cross-judge delta has no unit")
+    except ValueError as e:
+        assert "different questions" in str(e)
+
+
+def test_score_result_is_still_a_plain_dict():
+    import json
+    s = _metrics.score("harmbench", _C, _judged(_metrics.JUDGE_HARMBENCH, [1, 0, 0, 0]))
+    json.dumps({k: v for k, v in s.items() if k != "completions"})
+    assert dict(**{k: v for k, v in s.items() if k == "n"})["n"] == 4
