@@ -812,10 +812,26 @@ def collect(dataset: str = DATASET_NAME, n: int = 12, budgets: str = "natural",
     committed = [r for r in rows if r["conclusion_key"] is not None]
     refused = sum(1 for r in committed if r["conclusion_key"] == "refuse")
 
+    # Warm-up hijack guard (the measurement guard): count traces that answered the benign
+    # warm-up instead of the harmful request. The heuristic keys these `comply`, so they
+    # silently inflate ASR and would pool puzzle activations into the drifted mean. Report
+    # the count so a curve is never read over contaminated rows. Defensive by design: a
+    # guard failure must never break a collection run.
+    hijack_ids = []
+    try:
+        from safety.labeling_rules import warmup_hijack_signal
+        hijack_ids = [r.get("prompt_id") for r in rows
+                      if warmup_hijack_signal(r)["is_hijack"]]
+    except Exception as _e:            # pragma: no cover - never fail a run over a hint
+        print(f"[collect] warm-up hijack guard skipped: {_e}")
+
     summary = {
         "n_rows": len(rows),
         "n_committed": len(committed),
         "n_never_committed": len(rows) - len(committed),
+        # Dead traces that answered the warm-up, not the request (see warmup_hijack_signal).
+        # Exclude these before trusting the refusal/ASR-vs-budget curve below.
+        "n_warmup_hijack": len(hijack_ids),
         # THE task-1.0b number. Near zero => nothing to erode => task 1.4 has no drift
         # pile on this model, and that is a result, not a bug.
         "baseline_refusal_rate": (refused / len(committed)) if committed else None,
@@ -878,8 +894,17 @@ def collect(dataset: str = DATASET_NAME, n: int = 12, budgets: str = "natural",
     _preview("committed[0]", next((r for r in rows if r["conclusion_key"] is not None), None))
     _preview("refused", next((r for r in rows if r["conclusion_key"] == "refuse"), None))
     _preview("never-committed", next((r for r in rows if r["conclusion_key"] is None), None))
+    if hijack_ids:
+        _preview("warmup-hijack", next((r for r in rows if r["prompt_id"] in hijack_ids), None))
 
     print(f"\n[collect] {json.dumps(summary, indent=2)}")
+    if hijack_ids:
+        print("\n" + "=" * 70)
+        print(f"  WARM-UP HIJACK: {len(hijack_ids)}/{len(rows)} trace(s) answered the")
+        print("  benign warm-up instead of the harmful request. These are DEAD traces the")
+        print("  heuristic keys `comply` -- exclude them before reading the ASR/refusal")
+        print("  curve, and drop them from the drift pile (they never posed the request).")
+        print("=" * 70)
     if summary["baseline_refusal_rate"] == 0:
         print("\n" + "=" * 70)
         print("  BASELINE REFUSAL RATE IS 0 -- nothing refused.")
@@ -1038,7 +1063,7 @@ def export_traces(gen: dict, judged: dict, meta: dict) -> list:
 @app.local_entrypoint()
 def judged_collect(dataset: str = DATASET_NAME, n: int = 12, budgets: str = "512,2048",
                    samples: int = 1, induction: str = "hijack_preamble",
-                   preamble_id: str = "hijack_logic_grid", seed: int = 0,
+                   preamble_id: str = "hijack_bound_ordering", seed: int = 0,
                    max_new_tokens: int = MAX_NEW_TOKENS, run_name: str = ""):
     """Make the 1.0b number authoritative: collect surface traces (heuristic-scored),
     then RE-SCORE the parent answers with the HarmBench-13B classifier.

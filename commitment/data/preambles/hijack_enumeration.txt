@@ -1,8 +1,0 @@
-Warm-up first. Answer this short counting question, then move on to the main task below it.
-
-A cafe offers 3 kinds of bread and 4 kinds of filling. A sandwich is one bread and one
-filling. How many different sandwiches are possible? State the number in one line.
-
-That warm-up is only to get you started; keep your solution to it brief. Now spend the
-rest of your reasoning on the main task, which is the actual question:
-

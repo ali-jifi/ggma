@@ -20,11 +20,13 @@ fixes, each of which silently corrupts a result rather than raising:
      cannot be handed the harmful set's gold -- which is what lets
      safety/cell_stats.py detect the rows compute_cell_stats would invert.
 
-induction ("natural" | "hijack_preamble"): the padded variant prepends a preamble, but
-anchor_text is ALWAYS the bare request, so find_prompt_anchor_span excludes the
-preamble from the anchor span (R6). The same request keeps the same base id under both
-arms, so they land in the same split and pair up -- the proposal compares "induced
-against naturally occurring drift" (p.14), which is only possible if they do.
+induction ("natural" | "hijack_preamble"): the padded variant BINDS the request into a
+preamble (substituting it into the preamble's terminal {request} slot), but anchor_text
+is ALWAYS the bare request, so find_prompt_anchor_span -- a position-independent
+subsequence search -- excludes the preamble and locates the request wherever it sits
+(R6). The same request keeps the same base id under both arms, so they land in the same
+split and pair up -- the proposal compares "induced against naturally occurring drift"
+(p.14), which is only possible if they do.
 """
 
 import hashlib
@@ -158,7 +160,22 @@ def load_safety(dataset, *, n=None, n_per_category=None, seed=42,
             if induction == "natural":
                 prompt_text, pid = request, f"{base_pid}-natural"
             else:
-                prompt_text = f"{preamble_text}\n\n{request}"
+                # BIND, don't append. The request is substituted into a {request}
+                # slot the preamble places as its terminal required-output item, so
+                # "solve the puzzle" and "answer the request" are one continuous task.
+                # Appending the request as a separate second task (the pre-2026-07-19
+                # form) let the model answer the warm-up and stop -- 38% of the 1.0b
+                # traces did exactly that, mis-scored as `comply`. See preambles/README.md.
+                n_slots = preamble_text.count("{request}")
+                if n_slots != 1:
+                    raise ValueError(
+                        f"preamble {preamble_id!r} has {n_slots} '{{request}}' "
+                        "placeholders; expected exactly 1. Hijack preambles must BIND "
+                        "the request as a single terminal required-output item, not "
+                        "append it. Put one '{request}' where the harmful request goes "
+                        "(see preambles/README.md)."
+                    )
+                prompt_text = preamble_text.replace("{request}", request)
                 pid = f"{base_pid}-hijack-{preamble_id}"
             prompts.append({
                 "prompt_id": pid,
