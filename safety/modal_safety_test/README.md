@@ -71,7 +71,7 @@ uv run modal run app.py
 
 Flags (optional): `--seed 42 --n-per-category 2 --max-new-tokens 2048 --batch-size 8 --run-name debug-1`.
 
-Results land locally in the git-ignored scratch dir `<repo>/do_not_track/modal/<run_name>/`:
+Results land locally in the git-ignored dir `safety/outputs/<run_name>/` (next to the app):
 
 | file | what |
 |---|---|

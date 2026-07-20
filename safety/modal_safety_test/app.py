@@ -43,7 +43,7 @@ JUDGE_PY = SAFETY_DIR / "vendor" / "harmbench_judge.py"
 TRACE_EXPORT_PY = MODAL_DIR / "trace_export.py"
 DATA_LOCAL = SAFETY_DIR / "vendor" / "data"            # built by vendor/fetch_datasets.py; git-ignored
 REQS = SAFETY_DIR / "vendor" / "requirements-modal.txt"
-SCRATCH_DIR = REPO_ROOT / "do_not_track" / "modal"     # local, git-ignored outputs
+SCRATCH_DIR = SAFETY_DIR / "outputs"                   # run outputs land here, next to the app; git-ignored
 COMMITMENT_LOCAL = REPO_ROOT / "commitment"            # the shared trace pipeline
 
 LIB_REMOTE = "/root/ggma"                              # PYTHONPATH root in-container

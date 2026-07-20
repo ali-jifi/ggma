@@ -15,7 +15,7 @@ monotonicity 1.0 and pass it untouched, while zeroing it would admit a monotone-
 DECREASING population -- a broken matcher, the one thing this gate must still catch.
 
 Usage:
-    python3 safety/smoke_curves.py do_not_track/modal/<run_id>/traces.jsonl
+    python3 safety/smoke_curves.py safety/outputs/<run_id>/traces.jsonl
 """
 
 from __future__ import annotations

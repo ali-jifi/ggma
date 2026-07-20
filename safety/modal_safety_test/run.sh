@@ -3,7 +3,7 @@
 #
 # Everything modal prints (GPU info, per-condition "Average ... ASR" lines, the
 # per-prompt table, timings) is streamed to your terminal and also captured to
-#   ../../do_not_track/modal/<run-name>/terminal_output.txt
+#   ../outputs/<run-name>/terminal_output.txt
 # alongside the JSON artifacts, scores.txt, and results.md that app.py writes.
 #
 # Usage:
@@ -24,7 +24,7 @@ if [[ -z "$run_name" ]]; then
     args+=(--run-name "$run_name")
 fi
 
-out_dir="../../do_not_track/modal/$run_name"
+out_dir="../outputs/$run_name"
 mkdir -p "$out_dir"
 echo "Run name: $run_name"
 echo "Saving full terminal output to: $out_dir/terminal_output.txt"

@@ -12,3 +12,6 @@ commitment/outputs/traces/*.jsonl
 commitment/outputs/activations/*.npz
 commitment/outputs/figures/
 commitment/outputs/*_report.json
+
+# safety run outputs (Modal collect/judge) — data, not recipe; kept local per-clone
+safety/outputs/
