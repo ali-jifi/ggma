@@ -570,15 +570,14 @@ def batch_equivalence(model_path: str = "") -> dict:
     model.requires_grad_(False)
 
     ref = []
+    # Loop-invariant, hoisted (matches generate_natural_batch). Same cut rule as the
+    # batched arm -- union of stop ids + pad -- so the equivalence proof compares one rule.
+    pad_id = H.get_pad_id(model, tok)
+    stop_ids = set(H.get_eos_ids(model, tok)) | {pad_id}
     for p in prompts:
         ids = H.build_input_ids(model, tok, p)
-        out = model.generate(ids, max_new_tokens=48, do_sample=False,
-                             pad_token_id=H.get_pad_id(model, tok))
-        # Same cut rule as the batched arm (union of stop ids + pad). They used to
-        # differ, which would make the equivalence proof compare two rules.
-        new = H.cut_at_first_stop(
-            out[0, ids.shape[1]:],
-            set(H.get_eos_ids(model, tok)) | {H.get_pad_id(model, tok)})
+        out = model.generate(ids, max_new_tokens=48, do_sample=False, pad_token_id=pad_id)
+        new = H.cut_at_first_stop(out[0, ids.shape[1]:], stop_ids)
         ref.append(tok.decode(new, skip_special_tokens=True))
 
     report = {"ok": True, "batch_sizes": {}}
@@ -857,6 +856,7 @@ def collect(dataset: str = DATASET_NAME, n: int = 12, budgets: str = "natural",
     except Exception as _e:            # pragma: no cover - never fail a run over a hint
         print(f"[collect] warm-up hijack guard skipped: {_e}")
 
+    est_usd = round(elapsed * GPU_USD_PER_SEC.get(GPU, GPU_USD_PER_SEC["L4"]), 4)
     summary = {
         "n_rows": len(rows),
         "n_committed": len(committed),
@@ -885,10 +885,10 @@ def collect(dataset: str = DATASET_NAME, n: int = 12, budgets: str = "natural",
         "seconds_per_trace": round(elapsed / len(rows), 1) if rows else None,
         "rollout_generations": n_rollout_gens,
         "gpu": GPU,
-        "est_usd": round(elapsed * GPU_USD_PER_SEC.get(GPU, 0.000222), 4),
-        # kept under the old key too so existing report parsers do not silently
-        # read a missing value as 0; it is the ACTUAL gpu cost, not necessarily L4.
-        "est_usd_l4": round(elapsed * GPU_USD_PER_SEC.get(GPU, 0.000222), 4),
+        "est_usd": est_usd,
+        # kept under the old key too so existing report parsers do not silently read a
+        # missing value as 0. It is the ACTUAL gpu cost, not necessarily the L4 rate.
+        "est_usd_l4": est_usd,
         "scorer": rows[0]["scorer_version"] if rows else None,
     }
 
