@@ -24,6 +24,7 @@ Nothing runs automatically. See README.md for one-time setup, then:
 """
 
 import json
+import os
 import random
 import time
 from pathlib import Path
@@ -70,6 +71,20 @@ CACHE_DIR = "/cache"                                   # HF cache + direction ca
 ACT_LAYERS = (8, 12, 16, 20, 24)
 
 # --- model config (swap MODEL_PATH to change models) --------------------------
+# GPU is an env var, not a hardcode, so the same code can run a batched pass on a cheap
+# card and an unbatched forced-budget pass on a fast one:
+#   SAFETY_GPU=A100-40GB uv run modal run app.py::collect ...
+# Per SAFETY_NEXT_SMOKE_PLAN.md section 4: L4 has the worst bandwidth-per-dollar of any
+# card here. It is fine for BATCHED work, where the weakness is hidden, and the wrong
+# choice for UNBATCHED forced budgets, where A100-40GB is both ~2.6x faster AND cheaper
+# for the same work. A100-40GB also has 40GB vs L4's 24GB, which is what Qwen3-8B
+# (36 layers, ~151k vocab) needs to batch without OOM.
+GPU = os.environ.get("SAFETY_GPU", "L4")
+# $/second, so est_usd is not silently the L4 rate on another card.
+GPU_USD_PER_SEC = {"T4": 0.000164, "L4": 0.000222, "A10G": 0.000306,
+                   "A100-40GB": 0.000583, "A100-80GB": 0.000772,
+                   "L40S": 0.000542, "H100": 0.001097}
+
 MODEL_PATH = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"   # debug model (agreed by the team)
 MODEL_ALIAS = "deepseek-r1-distill-qwen-1.5b"
 # Debug : DeepSeek-R1-Distill-Qwen-1.5B
@@ -426,7 +441,7 @@ def _load_or_extract_direction(model, tokenizer):
     return direction.to(model.device), "extracted"
 
 
-@app.function(image=image, gpu="L4", timeout=3600, retries=0, secrets=[hf_secret], volumes={CACHE_DIR: hf_cache})
+@app.function(image=image, gpu=GPU, timeout=3600, retries=0, secrets=[hf_secret], volumes={CACHE_DIR: hf_cache})
 def generate(dataset: list, max_new_tokens: int = MAX_NEW_TOKENS,
              temperature: float = GEN_TEMP, top_p: float = GEN_TOP_P, seed: int = GEN_SEED) -> dict:
     """Baseline + refusal-direction-ablation completions, thinking on, in one container.
@@ -514,7 +529,7 @@ def generate(dataset: list, max_new_tokens: int = MAX_NEW_TOKENS,
     })
 
 
-@app.function(image=image, gpu="L4", timeout=1800, retries=0, secrets=[hf_secret],
+@app.function(image=image, gpu=GPU, timeout=1800, retries=0, secrets=[hf_secret],
               volumes={CACHE_DIR: hf_cache})
 def batch_equivalence(model_path: str = "") -> dict:
     """Prove batched == unbatched on the real GPU before any collection uses batching.
@@ -586,14 +601,22 @@ def batch_equivalence(model_path: str = "") -> dict:
 
     print(json.dumps(report, indent=2))
     if not report["ok"]:
-        print("\nFAIL: batched != unbatched. Left padding or the attention mask is "
-              "wrong -- do NOT collect with batch_size>1.")
+        print("\nFAIL: batched != unbatched byte-for-byte. Check WHERE they diverge "
+              "before concluding -- this message used to assert a padding bug and sent a "
+              "reader chasing one (2026-07-19):\n"
+              "  EARLY (first tokens), most/all prompts -> a real padding or "
+              "attention-mask bug. Do NOT collect with batch_size>1.\n"
+              "  LATE (deep in the text), one or two prompts, bs=1 clean -> bf16 "
+              "numerical nondeterminism on a near-tie under greedy decode. Expected on "
+              "larger models and it does NOT bias a rate: verified on "
+              "R1-Distill-Llama-8B, identical 0.15 refusal rate batched vs unbatched "
+              "over 20 prompts. Qwen3-1.7B/8B show the same late-divergence pattern.")
     else:
         print("\nPASS: batching is equivalent to the frozen engine.")
     return _jsonify(report)
 
 
-@app.function(image=image, gpu="L4", timeout=21600, retries=0, secrets=[hf_secret],
+@app.function(image=image, gpu=GPU, timeout=21600, retries=0, secrets=[hf_secret],
               volumes={CACHE_DIR: hf_cache})
 def collect(dataset: str = DATASET_NAME, n: int = 12, budgets: str = "natural",
             samples: int = 4, rollouts: int = 0, prefixes: int = 6,
@@ -861,7 +884,11 @@ def collect(dataset: str = DATASET_NAME, n: int = 12, budgets: str = "natural",
                                    if (len(rows) + n_rollout_gens) else None),
         "seconds_per_trace": round(elapsed / len(rows), 1) if rows else None,
         "rollout_generations": n_rollout_gens,
-        "est_usd_l4": round(elapsed * 0.000222, 4),   # modal.com/pricing
+        "gpu": GPU,
+        "est_usd": round(elapsed * GPU_USD_PER_SEC.get(GPU, 0.000222), 4),
+        # kept under the old key too so existing report parsers do not silently
+        # read a missing value as 0; it is the ACTUAL gpu cost, not necessarily L4.
+        "est_usd_l4": round(elapsed * GPU_USD_PER_SEC.get(GPU, 0.000222), 4),
         "scorer": rows[0]["scorer_version"] if rows else None,
     }
 
