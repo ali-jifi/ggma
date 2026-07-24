@@ -1,0 +1,222 @@
+[
+  {
+    "gsm8k_idx": 773,
+    "gold": "10",
+    "pred": "10",
+    "correct": true,
+    "method": "boxed",
+    "confidence": 1.0,
+    "think_tokens": 170,
+    "wall_clock_sec": 11.4,
+    "text": "First, I start with the total number of pencils Anthony has, which is 50.\n\nHe gives away half of his pencils to Brandon. To find out how many pencils that is, I calculate half of 50, which equals 25. So, Brandon gets 25 pencils.\n\nAfter giving 25 pencils to Brandon, Anthony has 25 pencils left.\n\nNext, Anthony gives 3/5 of the remaining 25 pencils to Charlie. To find out how many pencils that is, I calculate 3/5 of 25, which equals 15. So, Charlie gets 15 pencils.\n\nFinally, I subtract the pencils given to Brandon and Charlie from the original total to determine how many pencils Anthony kept. That means subtracting 25 and 15 from 50, which equals 10.\n\nTherefore, Anthony kept 10 pencils.\n</think>\n\nLet's determine how many pencils Anthony kept step by step.\n\n1. **Initial Number of Pencils:**\n   \\[\n   \\text{Total pencils} = 50\n   \\]\n\n2. **Pencils Given to Brandon:**\n   \\[\n   \\frac{1}{2} \\times 50 = 25 \\text{ pencils}\n   \\]\n   Remaining pencils after giving to Brandon:\n   \\[\n   50 - 25 = 25 \\text{ pencils}\n   \\]\n\n3. **Pencils Given to Charlie:**\n   \\[\n   \\frac{3}{5} \\times 25 = 15 \\text{ pencils}\n   \\]\n   Remaining pencils after giving to Charlie:\n   \\[\n   25 - 15 = 10 \\text{ pencils}\n   \\]\n\n4. **Pencils Kept by Anthony:**\n   \\[\n   \\boxed{10}\n   \\]"
+  },
+  {
+    "gsm8k_idx": 486,
+    "gold": "6",
+    "pred": "6",
+    "correct": true,
+    "method": "boxed",
+    "confidence": 1.0,
+    "think_tokens": 118,
+    "wall_clock_sec": 8.2,
+    "text": "First, I need to determine how many miles James runs each day. He runs 12 miles a day.\n\nNext, I'll calculate the total miles he runs in a week. He runs 5 days a week, so 12 miles/day multiplied by 5 days equals 60 miles per week.\n\nThen, I'll convert the total miles into hours. Since he runs at 10 miles per hour, I'll divide the total miles by his speed: 60 miles \u00f7 10 miles/hour equals 6 hours.\n\nTherefore, James runs for 6 hours each week.\n</think>\n\n**Solution:**\n\n1. **Calculate the total miles James runs per week:**\n   \n   \\[\n   \\text{Miles per day} \\times \\text{Days per week} = 12 \\text{ miles/day} \\times 5 \\text{ days} = 60 \\text{ miles/week}\n   \\]\n\n2. **Convert the total miles into hours (since he runs at 10 miles per hour):**\n   \n   \\[\n   \\frac{60 \\text{ miles}}{10 \\text{ miles/hour}} = 6 \\text{ hours}\n   \\]\n\n**Final Answer:**\n\n\\[\n\\boxed{6 \\text{ hours}}\n\\]"
+  },
+  {
+    "gsm8k_idx": 150,
+    "gold": "4",
+    "pred": "4",
+    "correct": true,
+    "method": "boxed",
+    "confidence": 1.0,
+    "think_tokens": 202,
+    "wall_clock_sec": 16.0,
+    "text": "First, I need to determine the time it takes for each boy to get home from school.\n\nFor Steve:\n- Distance = 3 miles\n- Speed = 440 feet per minute\n- Convert miles to feet: 3 miles \u00d7 5280 feet/mile = 15840 feet\n- Time = Distance / Speed = 15840 feet / 440 feet per minute \u2248 36 minutes\n\nFor Tim:\n- Distance = 2 miles\n- Speed = 264 feet per minute\n- Convert miles to feet: 2 miles \u00d7 5280 feet/mile = 10560 feet\n- Time = Distance / Speed = 10560 feet / 264 feet per minute = 40 minutes\n\nNext, I'll calculate the time difference between their arrivals:\n- Time Difference = Tim's Time - Steve's Time = 40 minutes - 36 minutes = 4 minutes\n\nFinally, the winner will wait for the loser for 4 minutes before they can go inside their house.\n</think>\n\n**Solution:**\n\nLet's determine how long the winner will wait for the loser to finish the race.\n\n1. **Calculate Steve's Time to Get Home:**\n   - **Distance:** 3 miles\n   - **Speed:** 440 feet per minute\n   - **Conversion:** 1 mile = 5280 feet\n   - **Total Distance in Feet:** \\(3 \\text{ miles} \\times 5280 \\text{ feet/mile} = 15840 \\text{ feet}\\)\n   - **Time:** \\(\\frac{15840 \\text{ feet}}{440 \\text{ feet/minute}} = 36 \\text{ minutes}\\)\n\n2. **Calculate Tim's Time to Get Home:**\n   - **Distance:** 2 miles\n   - **Speed:** 264 feet per minute\n   - **Total Distance in Feet:** \\(2 \\text{ miles} \\times 5280 \\text{ feet/mile} = 10560 \\text{ feet}\\)\n   - **Time:** \\(\\frac{10560 \\text{ feet}}{264 \\text{ feet/minute}} = 40 \\text{ minutes}\\)\n\n3. **Determine the Time Difference:**\n   - **Time Difference:** \\(40 \\text{ minutes} - 36 \\text{ minutes} = 4 \\text{ minutes}\\)\n\n**Conclusion:**\n\nThe winner will wait for the loser for **\\(\\boxed{4}\\)** minutes before they can go inside their house."
+  },
+  {
+    "gsm8k_idx": 532,
+    "gold": "25",
+    "pred": "25",
+    "correct": true,
+    "method": "boxed",
+    "confidence": 1.0,
+    "think_tokens": 250,
+    "wall_clock_sec": 17.6,
+    "text": "First, I'll determine Jame's current age by subtracting 5 years from his future age of 27.\n\nJame's current age is 27 - 5 = 22 years old.\n\nNext, I'll set up an equation to represent the relationship between Jame's age in 8 years and his cousin's age.\n\nIn 8 years, Jame will be 22 + 8 = 30 years old.\n\nLet \\( C \\) represent his cousin's current age.\n\nIn 8 years, his cousin will be \\( C + 8 \\) years old.\n\nAccording to the problem, in 8 years, his cousin will be 5 years younger than twice Jame's age in that time.\n\nSo, the equation is:\n\\( C + 8 = 2 \\times 30 - 5 \\)\n\nSolving the equation:\n\\( C + 8 = 60 - 5 \\)\n\\( C + 8 = 55 \\)\n\\( C = 55 - 8 \\)\n\\( C = 47 \\)\n\nTherefore, Jame's cousin is currently 47 years old.\n\nFinally, I'll find the age difference between Jame and his cousin:\n\\( 47 - 22 = 25 \\) years.\n</think>\n\nLet's solve the problem step by step.\n\n**Step 1: Determine Jame's Current Age**\n\nJame will be 27 in 5 years. Therefore, his current age is:\n\\[\n\\text{Jame's current age} = 27 - 5 = 22 \\text{ years old}\n\\]\n\n**Step 2: Express the Relationship Between the Ages in 8 Years**\n\nIn 8 years:\n- Jame's age will be:\n\\[\n22 + 8 = 30 \\text{ years old}\n\\]\n- Let \\( C \\) represent Jame's cousin's current age. In 8 years, the cousin's age will be:\n\\[\nC + 8 \\text{ years old}\n\\]\n\nAccording to the problem, in 8 years, the cousin will be 5 years younger than twice Jame's age at that time. This can be written as:\n\\[\nC + 8 = 2 \\times 30 - 5\n\\]\n\n**Step 3: Solve for the Cousin's Current Age**\n\n\\[\nC + 8 = 60 - 5\n\\]\n\\[\nC + 8 = 55\n\\]\n\\[\nC = 55 - 8\n\\]\n\\[\nC = 47\n\\]\n\n**Step 4: Determine the Age Difference Between Jame and His Cousin**\n\n\\[\n\\text{Age difference} = 47 - 22 = 25 \\text{ years}\n\\]\n\n\\[\n\\boxed{25}\n\\]"
+  },
+  {
+    "gsm8k_idx": 38,
+    "gold": "10",
+    "pred": "\\text{Insufficient information to determine the speed}",
+    "correct": false,
+    "method": "boxed",
+    "confidence": 1.0,
+    "think_tokens": 128,
+    "wall_clock_sec": 30.7,
+    "text": "First, I need to determine how many miles John runs each day.\n\nHe runs 3 hours on the first day, so I'll calculate the miles for that day by multiplying the distance per hour by 3.\n\nOn the other two days, he runs half as much as the first day. I'll calculate the miles for each of these two days by multiplying the miles from the first day by 0.5.\n\nNext, I'll sum the miles from all three days to find the total weekly mileage.\n\nFinally, to find his running speed, I'll divide the total weekly mileage by the total number of hours he runs each week.\n</think>\n\nLet's break down John's running routine step by step to determine his running speed.\n\n### **Step 1: Calculate Miles per Day**\n\n1. **First Day:**\n   - John runs **3 hours** on the first day.\n   - Assuming his speed is constant, the distance covered on the first day is:\n     \\[\n     \\text{Miles on first day} = 3 \\text{ hours} \\times \\text{Speed} = 3s\n     \\]\n\n2. **Other Two Days:**\n   - On the other two days, John runs **half as much** as the first day.\n   - Therefore, the distance covered on each of these two days is:\n     \\[\n     \\text{Miles on each of the other two days} = \\frac{1}{2} \\times 3s = 1.5s\n     \\]\n   - Combined for two days:\n     \\[\n     2 \\times 1.5s = 3s\n     \\]\n\n### **Step 2: Total Weekly Miles**\n\n- **First day:** \\(3s\\)\n- **Other two days:** \\(3s\\)\n- **Total miles per week:**\n  \\[\n  3s + 3s = 6s\n  \\]\n\n### **Step 3: Total Weekly Hours**\n\n- **First day:** 3 hours\n- **Other two days:** \\(2 \\times 1.5 = 3\\) hours\n- **Total hours per week:**\n  \\[\n  3 + 3 = 6 \\text{ hours}\n  \\]\n\n### **Step 4: Calculate Speed**\n\n- **Speed** is defined as:\n  \\[\n  \\text{Speed} = \\frac{\\text{Total Distance}}{\\text{Total Time}}\n  \\]\n- Substituting the known values:\n  \\[\n  s = \\frac{6s}{6 \\text{ hours}} = s\n  \\]\n  \nWait, that seems circular. Let's re-examine the problem.\n\nUpon closer inspection, the problem is asking for **how fast** John runs, which implies finding his speed in miles per hour. However, the given information is about the total miles per week and the distribution of running hours across days. \n\nTo find the speed, we need to express the total miles in terms of hours. \n\nLet's denote John's speed as \\( s \\) miles per hour.\n\n1. **First Day:**\n   - He runs for 3 hours.\n   - Distance covered: \\( 3s \\) miles.\n\n2. **Other Two Days:**\n   - Each day, he runs half as much as the first day.\n   - Distance per day: \\( \\frac{3s}{2} \\) miles.\n   - Combined for two days: \\( 2 \\times \\frac{3s}{2} = 3s \\) miles.\n\n3. **Total Distance per Week:**\n   - First day: \\( 3s \\) miles.\n   - Other two days: \\( 3s \\) miles.\n   - **Total miles per week:** \\( 3s + 3s = 6s \\) miles.\n\n4. **Total Time per Week:**\n   - First day: 3 hours.\n   - Other two days: \\( 2 \\times 1.5 = 3 \\) hours.\n   - **Total hours per week:** \\( 3 + 3 = 6 \\) hours.\n\n5. **Calculating Speed:**\n   - Speed is total distance divided by total time.\n   \\[\n   s = \\frac{6s}{6} = s\n   \\]\n   \nThis simplifies to \\( s = s \\), which is an identity and doesn't help us find the value of \\( s \\).\n\n**This suggests that the information provided is insufficient to determine John's speed.** We need additional information, such as the total miles he runs in a week or his total running time.\n\n**Final Answer:**\n\\boxed{\\text{Insufficient information to determine the speed}}"
+  },
+  {
+    "gsm8k_idx": 295,
+    "gold": "370",
+    "pred": "370",
+    "correct": true,
+    "method": "boxed",
+    "confidence": 1.0,
+    "think_tokens": 140,
+    "wall_clock_sec": 15.1,
+    "text": "First, I'll calculate the activities Darren does on the first day: 100 pushups, 50 squats, and 20 dumbbell presses. This totals to 170 activities.\n\nOn the second day, Darren increases his pushups by 20, so he does 120 pushups. He decreases his squats by 10, resulting in 40 squats. He doubles his dumbbell presses to 40. Adding these together, he performs 200 activities on the second day.\n\nFinally, I'll add the activities from both days: 170 on the first day and 200 on the second day, which sums up to a total of 370 activities over the two days.\n</think>\n\nLet's break down Darren's activities over the two days and calculate the total count.\n\n### **Day 1:**\n- **Push-ups:** 100\n- **Squats:** 50\n- **Dumbbell Presses:** 20\n\n**Total for Day 1:**\n\\[\n100 \\text{ (push-ups)} + 50 \\text{ (squats)} + 20 \\text{ (dumbbell presses)} = 170 \\text{ activities}\n\\]\n\n### **Day 2:**\n- **Push-ups:**  \n  Darren does **20 more** push-ups than on Day 1.\n  \\[\n  100 + 20 = 120 \\text{ push-ups}\n  \\]\n  \n- **Squats:**  \n  Darren does **10 fewer** squats than on Day 1.\n  \\[\n  50 - 10 = 40 \\text{ squats}\n  \\]\n  \n- **Dumbbell Presses:**  \n  Darren doubles the number of dumbbell presses.\n  \\[\n  20 \\times 2 = 40 \\text{ dumbbell presses}\n  \\]\n\n**Total for Day 2:**\n\\[\n120 \\text{ (push-ups)} + 40 \\text{ (squats)} + 40 \\text{ (dumbbell presses)} = 200 \\text{ activities}\n\\]\n\n### **Total Activities Over Two Days:**\n\\[\n170 \\text{ (Day 1)} + 200 \\text{ (Day 2)} = 370 \\text{ activities}\n\\]\n\n\\[\n\\boxed{370}\n\\]"
+  },
+  {
+    "gsm8k_idx": 278,
+    "gold": "40",
+    "pred": "40",
+    "correct": true,
+    "method": "boxed",
+    "confidence": 1.0,
+    "think_tokens": 198,
+    "wall_clock_sec": 12.8,
+    "text": "First, I'll define variables for Mico and Marco's current ages. Let\u2019s say Mico is \\( m \\) years old and Marco is \\( n \\) years old.\n\nAccording to the problem, the sum of their ages is 20. So, I can write the equation:\n\\[ m + n = 20 \\]\n\nIn 10 years, both of them will be 10 years older. Therefore, their future ages will be \\( m + 10 \\) and \\( n + 10 \\), respectively.\n\nTo find the sum of their ages in 10 years, I'll add these future ages:\n\\[ (m + 10) + (n + 10) = m + n + 20 \\]\n\nSince I already know that \\( m + n = 20 \\), I can substitute that into the equation:\n\\[ 20 + 20 = 40 \\]\n\nSo, the sum of their ages in 10 years will be 40.\n</think>\n\nLet's solve the problem step by step.\n\n**Given:**\n- Let \\( M \\) be Mico's current age.\n- Let \\( N \\) be Marco's current age.\n- The sum of their ages is 20:\n  \\[\n  M + N = 20\n  \\]\n\n**Question:**\nWhat will be the sum of their ages in 10 years?\n\n**Solution:**\n- In 10 years, Mico's age will be \\( M + 10 \\).\n- In 10 years, Marco's age will be \\( N + 10 \\).\n- The sum of their ages in 10 years will be:\n  \\[\n  (M + 10) + (N + 10) = M + N + 20\n  \\]\n- Substitute the known value of \\( M + N \\):\n  \\[\n  M + N + 20 = 20 + 20 = 40\n  \\]\n\n**Answer:**\n\\[\n\\boxed{40}\n\\]"
+  },
+  {
+    "gsm8k_idx": 587,
+    "gold": "30",
+    "pred": "30",
+    "correct": true,
+    "method": "boxed",
+    "confidence": 1.0,
+    "think_tokens": 1108,
+    "wall_clock_sec": 44.0,
+    "text": "Okay, so I've got this problem about jelly beans at Burger Palace. Let me try to figure it out step by step. The jar has red, blue, and green jelly beans. The note says two things: first, that there are 1% fewer red jelly beans than blue ones, and second, that there are 1% more green jelly beans than blue ones. The total number of jelly beans is 4500. I need to find out how many more green jelly beans there are than red ones.\n\nHmm, okay, let me break this down. Let's denote the number of blue jelly beans as B. That seems like a good starting point because the note relates red and green jelly beans to blue ones.\n\nSo, the note says there are 1% fewer red jelly beans than blue. That means red jelly beans are 99% of blue jelly beans. In mathematical terms, that would be:\n\nRed = B - (1% of B) = B - 0.01B = 0.99B\n\nSimilarly, green jelly beans are 1% more than blue ones. So, green would be:\n\nGreen = B + (1% of B) = B + 0.01B = 1.01B\n\nAlright, so now I have expressions for red and green in terms of blue. Let me write that down:\n\n- Red: 0.99B\n- Blue: B\n- Green: 1.01B\n\nThe total jelly beans are the sum of red, blue, and green, which is given as 4500. So, I can set up the equation:\n\n0.99B + B + 1.01B = 4500\n\nLet me compute the left side:\n\n0.99B + B + 1.01B\n\nLet me add the coefficients:\n\n0.99 + 1 + 1.01\n\nHmm, 0.99 + 1 is 1.99, and 1.99 + 1.01 is 3.00.\n\nSo, that simplifies to 3B = 4500\n\nTherefore, B = 4500 / 3 = 1500\n\nWait, so blue jelly beans are 1500? Let me check:\n\nIf blue is 1500, then red is 0.99 * 1500. Let me calculate that: 1500 - 15 = 1485. So, red is 1485.\n\nGreen is 1.01 * 1500. That would be 1500 + 15 = 1515.\n\nLet me verify if the total is indeed 4500:\n\n1485 (red) + 1500 (blue) + 1515 (green) = ?\n\n1485 + 1500 is 2985, and 2985 + 1515 is 4500. Yes, that adds up.\n\nSo, now, the question is asking how many more green jelly beans there are than red ones. So, I need to compute Green - Red.\n\nGreen is 1515, red is 1485.\n\n1515 - 1485 = 30.\n\nSo, there are 30 more green jelly beans than red ones.\n\nWait, let me double-check my calculations to make sure I didn't make any mistakes.\n\nStarting from B = 1500.\n\nRed: 0.99 * 1500 = 1485. That's correct.\n\nGreen: 1.01 * 1500 = 1515. That's correct.\n\nTotal: 1485 + 1500 + 1515. Let's add them again:\n\n1485 + 1500: 1485 + 1500 is 2985. Then, 2985 + 1515. 2985 + 1500 is 4485, plus 15 more is 4500. Perfect.\n\nDifference between green and red: 1515 - 1485 = 30. Yep, that's correct.\n\nSo, I think that's the answer. But let me think again if there's another way to approach this problem or if I misinterpreted anything.\n\nThe note says \"1% fewer red jelly beans than blue\" and \"1% more green jelly beans than blue.\" So, red is 99% of blue, green is 101% of blue. So, in terms of percentages, red is 99%, blue is 100%, green is 101%. So, altogether, that's 99 + 100 + 101 = 300%, which is 3 times blue. So, total jelly beans are 300% of blue, which is 3B. So, 3B = 4500, so B = 1500. That's consistent with what I did earlier.\n\nTherefore, the difference between green and red is 101% - 99% = 2% of blue jelly beans. So, 2% of 1500 is 0.02 * 1500 = 30. So, that's another way to get the difference, which is 30. So, that also gives me 30.\n\nSo, whether I compute it directly or think in terms of percentages, I get the same answer. So, I'm pretty confident that the answer is 30.\n\n**Final Answer**\nThe jar contains \\boxed{30} more green jelly beans than red jelly beans.\n</think>\n\nLet \\( B \\) be the number of blue jelly beans. According to the note, the number of red jelly beans is 1% fewer than blue jelly beans, which can be expressed as \\( 0.99B \\). The number of green jelly beans is 1% more than blue jelly beans, which can be expressed as \\( 1.01B \\).\n\nThe total number of jelly beans is given as 4500. Therefore, we can write the equation:\n\n\\[\n0.99B + B + 1.01B = 4500\n\\]\n\nCombining the terms, we get:\n\n\\[\n(0.99 + 1 + 1.01)B = 4500\n\\]\n\nThis simplifies to:\n\n\\[\n3B = 4500\n\\]\n\nSolving for \\( B \\):\n\n\\[\nB = \\frac{4500}{3} = 1500\n\\]\n\nThus, the number of blue jelly beans is 1500. The number of red jelly beans is:\n\n\\[\n0.99 \\times 1500 = 1485\n\\]\n\nThe number of green jelly beans is:\n\n\\[\n1.01 \\times 1500 = 1515\n\\]\n\nThe difference between the number of green jelly beans and red jelly beans is:\n\n\\[\n1515 - 1485 = 30\n\\]\n\nTherefore, the jar contains \\boxed{30} more green jelly beans than red jelly beans."
+  },
+  {
+    "gsm8k_idx": 560,
+    "gold": "45",
+    "pred": "45",
+    "correct": true,
+    "method": "boxed",
+    "confidence": 1.0,
+    "think_tokens": 153,
+    "wall_clock_sec": 9.2,
+    "text": "First, I need to determine the total number of cages in the pet shop. There are 6 cages in total.\n\nNext, I'll calculate the number of hamsters and guinea pigs separately. There are 3 cages with 10 hamsters each, so the total number of hamsters is 3 multiplied by 10, which equals 30.\n\nThen, there are also 3 cages with 5 guinea pigs each. To find the total number of guinea pigs, I'll multiply 3 by 5, resulting in 15.\n\nFinally, to find the total number of rodents, I'll add the number of hamsters and guinea pigs together: 30 hamsters plus 15 guinea pigs equals 45 rodents in total.\n</think>\n\n**Solution:**\n\nThe pet shop has a total of **6 cages**.\n\n- **Number of hamsters:**\n  - **3 cages** each containing **10 hamsters**\n  - Total hamsters = \\( 3 \\times 10 = 30 \\) hamsters\n\n- **Number of guinea pigs:**\n  - **3 cages** each containing **5 guinea pigs**\n  - Total guinea pigs = \\( 3 \\times 5 = 15 \\) guinea pigs\n\n- **Total number of rodents:**\n  - Hamsters + Guinea pigs = \\( 30 + 15 = 45 \\) rodents\n\n\\[\n\\boxed{45}\n\\]"
+  },
+  {
+    "gsm8k_idx": 646,
+    "gold": "79",
+    "pred": "79",
+    "correct": true,
+    "method": "boxed",
+    "confidence": 1.0,
+    "think_tokens": 62,
+    "wall_clock_sec": 10.0,
+    "text": "First, I'll calculate the total distance Alisa biked by multiplying her speed by the time she spent biking.\n\nNext, I'll determine Stanley's total distance by multiplying his speed by his biking time.\n\nFinally, I'll add both distances together to find the combined total distance Alisa and Stanley biked.\n</think>\n\n**Solution:**\n\nTo find the total distance that Alisa and Stanley biked, follow these steps:\n\n1. **Calculate Alisa's total distance:**\n   \n   \\[\n   \\text{Distance} = \\text{Speed} \\times \\text{Time}\n   \\]\n   \n   \\[\n   \\text{Alisa's Distance} = 12 \\, \\text{mph} \\times 4.5 \\, \\text{hours} = 54 \\, \\text{miles}\n   \\]\n\n2. **Calculate Stanley's total distance:**\n   \n   \\[\n   \\text{Stanley's Distance} = 10 \\, \\text{mph} \\times 2.5 \\, \\text{hours} = 25 \\, \\text{miles}\n   \\]\n\n3. **Find the combined total distance:**\n   \n   \\[\n   \\text{Total Distance} = \\text{Alisa's Distance} + \\text{Stanley's Distance} = 54 \\, \\text{miles} + 25 \\, \\text{miles} = 79 \\, \\text{miles}\n   \\]\n\n**Final Answer:**\n\n\\[\n\\boxed{79}\n\\]"
+  },
+  {
+    "gsm8k_idx": 781,
+    "gold": "17",
+    "pred": "2",
+    "correct": false,
+    "method": "boxed",
+    "confidence": 1.0,
+    "think_tokens": 89,
+    "wall_clock_sec": 8.8,
+    "text": "First, I need to determine the total cost of all four pizzas, which is \\$64.\n\nTwo of the pizzas cost \\$30 each, so together they amount to \\$60.\n\nTo find out the remaining cost for the other two pizzas, I subtract \\$60 from \\$64, leaving \\$4 for both pizzas combined.\n\nSince the other two pizzas cost the same amount, I divide \\$4 by 2, resulting in \\$2 per pizza.\n</think>\n\nLet's solve the problem step by step.\n\n**Given:**\n- Total cost of four pizzas = \\$64\n- Cost of two pizzas = \\$30 each\n\n**Let:**\n- Cost of each of the other two pizzas = \\( x \\) dollars\n\n**Step 1:** Calculate the total cost of the two pizzas that cost \\$30 each.\n\\[\n\\text{Total cost of two \\$30 pizzas} = 30 + 30 = \\$60\n\\]\n\n**Step 2:** Subtract this amount from the total cost to find the cost of the remaining two pizzas.\n\\[\n\\text{Remaining cost} = \\$64 - \\$60 = \\$4\n\\]\n\n**Step 3:** Since the remaining two pizzas cost the same, divide the remaining cost by 2.\n\\[\nx = \\frac{\\$4}{2} = \\$2\n\\]\n\n**Answer:**\n\\[\n\\boxed{2}\n\\]"
+  },
+  {
+    "gsm8k_idx": 1314,
+    "gold": "8",
+    "pred": "40",
+    "correct": false,
+    "method": "boxed",
+    "confidence": 1.0,
+    "think_tokens": 118,
+    "wall_clock_sec": 18.2,
+    "text": "First, I need to determine Dora's current age. Since Dora will turn 12 in 3 years, she is currently 9 years old.\n\nNext, James is currently twice as old as Dora. Therefore, James is 18 years old.\n\nJohn had James when he was 19, so John is 19 years older than James. That makes John 37 years old.\n\nJohn's youngest son was born when John was 32, which means the son is currently 5 years old.\n\nIn 3 years, the youngest son will be 8 years old.\n</think>\n\nLet's break down the problem step by step to find out how old John's youngest son will be in 3 years.\n\n### **Step 1: Determine Dora's Current Age**\n- **Given:** Dora will turn 12 in 3 years.\n- **To Find:** Dora's current age.\n\n\\[\n\\text{Dora's current age} = \\text{Dora's age in 3 years} - 3 = 12 - 3 = 9 \\text{ years}\n\\]\n\n### **Step 2: Determine James's Current Age**\n- **Given:** James is now twice as old as Dora.\n- **To Find:** James's current age.\n\n\\[\n\\text{James's current age} = 2 \\times \\text{Dora's current age} = 2 \\times 9 = 18 \\text{ years}\n\\]\n\n### **Step 3: Determine John's Current Age**\n- **Given:** John had James when he was 19.\n- **To Find:** John's current age.\n\n\\[\n\\text{John's current age} = \\text{John's age when James was born} + \\text{James's current age} = 19 + 18 = 37 \\text{ years}\n\\]\n\n### **Step 4: Determine the Youngest Son's Current Age**\n- **Given:** John's youngest son was born when John was 32.\n- **To Find:** Youngest son's current age.\n\n\\[\n\\text{Youngest son's current age} = \\text{John's age when the son was born} + \\text{Son's age} = 32 + 5 = 37 \\text{ years}\n\\]\n**Note:** The youngest son's age is calculated by assuming he was born when John was 32. Therefore, the son is currently 5 years old.\n\n### **Step 5: Determine the Youngest Son's Age in 3 Years**\n\\[\n\\text{Youngest son's age in 3 years} = \\text{Youngest son's current age} + 3 = 37 + 3 = 40 \\text{ years}\n\\]\n\n### **Final Answer**\n\\[\n\\boxed{40}\n\\]"
+  },
+  {
+    "gsm8k_idx": 1070,
+    "gold": "18",
+    "pred": "\\16.02",
+    "correct": false,
+    "method": "boxed",
+    "confidence": 1.0,
+    "think_tokens": 218,
+    "wall_clock_sec": 17.3,
+    "text": "First, I need to determine how many pounds of butter Dennis requires to make 6 dozen croissants. Since he uses 1 pound of butter for every dozen croissants, he will need 6 pounds of butter in total.\n\nNext, I'll calculate the total cost of purchasing 6 pounds of butter. The grocery store promotion offers a discount of one half pound for every pound purchased. For every pound bought, Dennis gets an additional half pound at no extra cost. This means for every 1 pound he buys, he effectively gets 1.5 pounds of butter.\n\nTo find the total cost, I'll first calculate the cost per pound with the discount. Since the discount is one half pound per pound purchased, the effective cost per pound is $4.00 divided by 1.5, which equals approximately $2.67 per pound.\n\nFinally, I'll multiply the effective cost per pound by the total pounds needed (6 pounds) to find the total cost. This calculation gives me the total amount Dennis will pay for 6 pounds of butter under the promotion.\n</think>\n\n**Solution:**\n\n1. **Determine the amount of butter needed:**\n   \n   Dennis uses **1 pound of butter** for every **12 croissants** (1 dozen). He needs to make **6 dozen** croissants.\n   \n   \\[\n   \\text{Pounds of butter needed} = 6 \\text{ dozen} \\times 1 \\text{ pound/dozen} = 6 \\text{ pounds}\n   \\]\n\n2. **Calculate the total cost with the promotion:**\n   \n   - **Promotion Details:** Buy 1 pound, get 1/2 pound free.\n   - **Total butter received for purchasing 6 pounds:**\n     \n     \\[\n     \\text{Total butter} = \\text{Purchased pounds} + \\left(\\frac{1}{2} \\times \\text{Purchased pounds}\\right) = 6 \\text{ pounds} + 3 \\text{ pounds} = 9 \\text{ pounds}\n     \\]\n   \n   - **Effective Cost per Pound:**\n     \n     Since you get 1.5 pounds for the price of 1 pound.\n     \n     \\[\n     \\text{Effective cost per pound} = \\frac{\\$4.00}{1.5} \\approx \\$2.67 \\text{ per pound}\n     \\]\n   \n   - **Total Cost:**\n     \n     \\[\n     \\text{Total cost} = 6 \\text{ pounds} \\times \\$2.67/\\text{pound} \\approx \\$16.02\n     \\]\n\n**Final Answer:**\n\n\\boxed{\\$16.02}"
+  },
+  {
+    "gsm8k_idx": 994,
+    "gold": "2",
+    "pred": "2",
+    "correct": true,
+    "method": "boxed",
+    "confidence": 1.0,
+    "think_tokens": 721,
+    "wall_clock_sec": 27.3,
+    "text": "Okay, so I've got this problem about three wolves\u2014Tobias, Chikote, and Igneous\u2014and their howling durations. I need to figure out the combined length of time they howl altogether, and then convert that into minutes. Hmm, let's break this down step by step.\n\nFirst, the problem says that Tobias howls for a total of 20 seconds. That's straightforward. So, Tobias's howl duration is 20 seconds. Got that.\n\nNext, it mentions that Chikote howls for twice as long as Tobias. Hmm, okay, so if Tobias's howl is 20 seconds, Chikote's must be double that. Let me write that out:\n\nChikote's howl duration = 2 \u00d7 Tobias's howl duration\nChikote = 2 \u00d7 20 seconds\nChikote = 40 seconds\n\nAlright, so Chikote howls for 40 seconds. That makes sense.\n\nNow, the tricky part is Igneous. The problem says Igneous howls for as long as the other two wolves combined. Hmm, so Igneous's howl duration is equal to the sum of Tobias's and Chikote's howls. Let me write that out:\n\nIgnenous's howl duration = Tobias's howl duration + Chikote's howl duration\nIgnenous = 20 seconds + 40 seconds\nIgnenous = 60 seconds\n\nWait, so Igneous howls for 60 seconds? That seems right because 20 plus 40 is 60. So, each of them howls for 20, 40, and 60 seconds respectively.\n\nNow, the question is asking for the combined length of time of the three wolves' howls. So, I need to add up all their howl durations. Let me write that:\n\nTotal howl duration = Tobias + Chikote + Igneous\nTotal = 20 seconds + 40 seconds + 60 seconds\n\nLet me add those up:\n\n20 + 40 = 60\n60 + 60 = 120\n\nSo, the total howl duration is 120 seconds. But the question asks for the combined length in minutes. Hmm, right, so I need to convert seconds to minutes.\n\nThere are 60 seconds in a minute, so I can divide the total seconds by 60 to get the number of minutes.\n\nTotal howl duration in minutes = Total seconds \u00f7 60\nTotal minutes = 120 \u00f7 60\nTotal minutes = 2 minutes\n\nSo, the combined length of time of the three wolves' howls is 2 minutes.\n\nWait a second, let me just double-check my calculations to make sure I didn't make a mistake. It's easy to mix up the durations.\n\nTobias: 20 seconds\nChikote: 2 \u00d7 20 = 40 seconds\nIgnenous: 20 + 40 = 60 seconds\nTotal: 20 + 40 + 60 = 120 seconds\n120 seconds \u00f7 60 = 2 minutes\n\nYep, that seems correct. So, I think 2 minutes is the right answer.\n\nJust to visualize, if all three howled at the same time, their combined howl would last 2 minutes. That seems reasonable given the durations. So, I feel confident about this.\n\n**Final Answer**\nThe combined length of time of the three wolves' howls is \\boxed{2} minutes.\n</think>\n\nTobias howls for 20 seconds. Chikote howls for twice as long as Tobias, which is \\(2 \\times 20 = 40\\) seconds. Igneous howls for as long as the other two wolves combined, which is \\(20 + 40 = 60\\) seconds. \n\nAdding up their howl durations:\n- Tobias: 20 seconds\n- Chikote: 40 seconds\n- Igneous: 60 seconds\n\nTotal howl duration: \\(20 + 40 + 60 = 120\\) seconds.\n\nConverting 120 seconds to minutes: \\(\\frac{120}{60} = 2\\) minutes.\n\nThe combined length of time of the three wolves' howls is \\(\\boxed{2}\\) minutes."
+  },
+  {
+    "gsm8k_idx": 99,
+    "gold": "58",
+    "pred": "58",
+    "correct": true,
+    "method": "boxed",
+    "confidence": 1.0,
+    "think_tokens": 136,
+    "wall_clock_sec": 12.0,
+    "text": "First, determine the total number of potted plants Mary currently has by calculating the initial 18 new plants plus the 2 plants on each of the 40 window ledges. This gives Mary a total of 18 + 80 = 98 potted plants.\n\nNext, account for the plants Mary will give away. She will give 1 potted plant from each of the 40 ledges, which means she will give away a total of 40 potted plants.\n\nFinally, subtract the number of plants Mary gives away from her total to find out how many plants she will have left. So, 98 - 40 = 58 potted plants remaining.\n</think>\n\nLet's break down the problem step by step to find out how many potted plants Mary will have after giving some away.\n\n1. **Total Potted Plants Mary Currently Has:**\n   - **New Plants Received:** 18\n   - **Existing Plants:** 2 plants on each of the 40 window ledges.\n     \\[\n     2 \\text{ plants/ledge} \\times 40 \\text{ ledges} = 80 \\text{ plants}\n     \\]\n   - **Total:** \n     \\[\n     18 + 80 = 98 \\text{ potted plants}\n     \\]\n\n2. **Plants Mary Will Give Away:**\n   - **Number of Ledges:** 40\n   - **Plants Given Away:** 1 plant per ledge.\n     \\[\n     40 \\text{ plants}\n     \\]\n\n3. **Calculating the Remaining Plants:**\n   \\[\n   \\text{Remaining plants} = \\text{Total plants} - \\text{Plants given away}\n   \\]\n   \\[\n   98 - 40 = 58\n   \\]\n\n**Final Answer:**\n\\[\n\\boxed{58}\n\\]"
+  },
+  {
+    "gsm8k_idx": 939,
+    "gold": "650",
+    "pred": "650",
+    "correct": true,
+    "method": "boxed",
+    "confidence": 1.0,
+    "think_tokens": 148,
+    "wall_clock_sec": 11.8,
+    "text": "First, I need to determine the total number of letters Craig has spelled. It's given that he spelled 20 words, each with 15 letters. So, I'll multiply the number of words by the average letters per word: 20 \u00d7 15 = 300 letters.\n\nNext, I'll calculate the total number of letters his brother has spelled. It's stated that the brother has a total count of letters that is 50 more than Craig. Therefore, I'll add 50 to Craig's total: 300 + 50 = 350 letters.\n\nFinally, to find the combined total number of letters from both Craig and his brother, I'll add their totals together: 300 + 350 = 650 letters.\n</think>\n\nLet's break down the problem step by step to find the total number of letters in the words they've spelled after the ten rounds.\n\n1. **Calculate Craig's Total Letters:**\n   \n   - **Number of Words Spelled:** 20\n   - **Letters per Word:** 15\n   - **Total Letters for Craig:** \n     \\[\n     20 \\text{ words} \\times 15 \\text{ letters per word} = 300 \\text{ letters}\n     \\]\n\n2. **Calculate Brother's Total Letters:**\n   \n   - **Total Letters More Than Craig:** 50\n   - **Brother's Total Letters:** \n     \\[\n     300 \\text{ letters} + 50 \\text{ letters} = 350 \\text{ letters}\n     \\]\n\n3. **Calculate Combined Total Letters:**\n   \n   - **Total Letters Spelled by Both:** \n     \\[\n     300 \\text{ letters} + 350 \\text{ letters} = 650 \\text{ letters}\n     \\]\n\n**Final Answer:**\n\\[\n\\boxed{650}\n\\]"
+  },
+  {
+    "gsm8k_idx": 269,
+    "gold": "4",
+    "pred": "4",
+    "correct": true,
+    "method": "boxed",
+    "confidence": 1.0,
+    "think_tokens": 108,
+    "wall_clock_sec": 7.4,
+    "text": "First, I recognize that there are 16 balls in total.\n\nNext, I know that half of these balls are golf balls. So, I calculate half of 16 to find the number of golf balls: 16 / 2 = 8 golf balls.\n\nThen, I'm told that half of the golf balls are blue. To find the number of blue golf balls, I take half of the 8 golf balls: 8 / 2 = 4 blue golf balls.\n\nTherefore, there are 4 blue golf balls.\n</think>\n\nLet's solve the problem step by step.\n\n**Given:**\n- Total number of balls = 16\n- Half of the balls are golf balls.\n- Half of the golf balls are blue.\n\n**Step 1: Calculate the number of golf balls.**\n\\[\n\\text{Number of golf balls} = \\frac{16}{2} = 8\n\\]\n\n**Step 2: Calculate the number of blue golf balls.**\n\\[\n\\text{Number of blue golf balls} = \\frac{8}{2} = 4\n\\]\n\n**Final Answer:**\n\\[\n\\boxed{4}\n\\]"
+  },
+  {
+    "gsm8k_idx": 201,
+    "gold": "114200",
+    "pred": "\\114\\!200",
+    "correct": false,
+    "method": "boxed",
+    "confidence": 1.0,
+    "think_tokens": 152,
+    "wall_clock_sec": 12.2,
+    "text": "John received a $5,000 award and a 5% salary raise. His weekly salary is $2,000. \n\nFirst, I'll calculate the weekly raise by applying 5% to his current salary:\n$2,000 * 0.05 = $100 per week.\n\nNext, I'll determine the total weekly income after the raise:\n$2,000 + $100 = $2,100 per week.\n\nSince he works 52 weeks a year, the total annual income before the award is:\n$2,100 * 52 = $109,200.\n\nFinally, I'll add the one-time award to find the total money made for the year:\n$109,200 + $5,000 = $114,200.\n</think>\n\n**Solution:**\n\nJohn's total income for the year can be calculated by considering both his weekly salary and the one-time award he received.\n\n1. **Calculate the Weekly Raise:**\n   \n   John received a 5% raise on his salary. \n   \n   \\[\n   \\text{Weekly Raise} = \\$2000 \\times 5\\% = \\$2000 \\times 0.05 = \\$100\n   \\]\n\n2. **Calculate the Total Weekly Income After the Raise:**\n   \n   \\[\n   \\text{Total Weekly Income} = \\$2000 + \\$100 = \\$2100\n   \\]\n\n3. **Calculate the Annual Income Before the Award:**\n   \n   John works 52 weeks a year.\n   \n   \\[\n   \\text{Annual Income Before Award} = \\$2100 \\times 52 = \\$109,200\n   \\]\n\n4. **Add the One-Time Award:**\n   \n   \\[\n   \\text{Total Annual Income} = \\$109,200 + \\$5000 = \\$114,200\n   \\]\n\n**Final Answer:**\n\n\\[\n\\boxed{\\$114,\\!200}\n\\]"
+  },
+  {
+    "gsm8k_idx": 1076,
+    "gold": "162",
+    "pred": "\\162.00",
+    "correct": false,
+    "method": "boxed",
+    "confidence": 1.0,
+    "think_tokens": 178,
+    "wall_clock_sec": 14.2,
+    "text": "First, I'll calculate the total revenue from each item Terry sells.\n\nFor the milkshakes:\nHe sells 6 milkshakes at $5.50 each.\nTotal milkshake revenue = 6 \u00d7 $5.50 = $33.00.\n\nFor the burger platters:\nHe sells 9 burger platters at $11 each.\nTotal burger platter revenue = 9 \u00d7 $11 = $99.00.\n\nFor the sodas:\nHe sells 20 sodas at $1.50 each.\nTotal soda revenue = 20 \u00d7 $1.50 = $30.00.\n\nNext, I'll add up all the revenues to find the total money Terry makes.\nTotal revenue = $33.00 (milkshakes) + $99.00 (burger platters) + $30.00 (sodas) = $162.00.\n</think>\n\nLet's calculate the total revenue Terry makes from selling milkshakes, burger platters, and sodas.\n\n1. **Milkshakes:**\n   - **Number sold:** 6\n   - **Price per milkshake:** \\$5.50\n   - **Total revenue from milkshakes:**  \n     \\( 6 \\times \\$5.50 = \\$33.00 \\)\n\n2. **Burger Platters:**\n   - **Number sold:** 9\n   - **Price per burger platter:** \\$11\n   - **Total revenue from burger platters:**  \n     \\( 9 \\times \\$11 = \\$99.00 \\)\n\n3. **Sodas:**\n   - **Number sold:** 20\n   - **Price per soda:** \\$1.50\n   - **Total revenue from sodas:**  \n     \\( 20 \\times \\$1.50 = \\$30.00 \\)\n\n4. **Total Revenue:**\n   - **Sum of all revenues:**  \n     \\( \\$33.00 \\) (milkshakes) + \\( \\$99.00 \\) (burger platters) + \\( \\$30.00 \\) (sodas)  \n     \\( = \\$162.00 \\)\n\n**Final Answer:**  \n\\[\n\\boxed{\\$162.00}\n\\]"
+  },
+  {
+    "gsm8k_idx": 819,
+    "gold": "6250",
+    "pred": "6",
+    "correct": false,
+    "method": "boxed",
+    "confidence": 1.0,
+    "think_tokens": 137,
+    "wall_clock_sec": 9.0,
+    "text": "First, I need to determine how much money each student raised. The total amount raised by the students is $175,000, but this includes contributions from organizations as well. It's mentioned that $50,000 comes from organizations, so the amount raised solely by the students is $175,000 minus $50,000, which equals $125,000.\n\nNext, since there are 20 students working together and each earns the same amount, I can find out each student's share by dividing the total amount raised by the number of students. Dividing $125,000 by 20 gives $6,250 per student.\n\nTherefore, each student raised $6,250.\n</think>\n\nTo determine how much each student raised, let's break down the problem step by step.\n\n1. **Total Amount Raised:**\n   - **Charity Total:** \\$175,000\n   - **Amount from Organizations:** \\$50,000\n   - **Amount from Students:** \\$175,000 - \\$50,000 = \\$125,000\n\n2. **Number of Students:**\n   - There are **20 students** involved.\n\n3. **Amount Raised per Student:**\n   - **Total Student Contribution:** \\$125,000\n   - **Each Student's Share:** \\$125,000 \u00f7 20 = \\$6,250\n\n**Final Answer:**\n\\[\n\\boxed{6,\\!250}\n\\]"
+  }
+]
