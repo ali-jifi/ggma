@@ -168,6 +168,10 @@ def surface_traces(model, tok, model_meta, prompts: List[dict], matcher, *,
             prompt_id=p["prompt_id"],
             prompt_text=p["prompt_text"],
             budget_condition=str(budget_condition),
+            # Natural-only path (forced budgets raise above), so thinking_tokens is the
+            # model's chosen length: forcing_method="none", matching the unbatched writer
+            # (pipeline.py) field-for-field, per this function's docstring contract.
+            forcing_method="none",
             thinking_tokens=row.think_tokens,
             response_text=row.text,
             conclusion_key=key,
