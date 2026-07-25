@@ -24,3 +24,6 @@ do_not_track/
 # tool caches
 .pytest_cache/
 .ruff_cache/
+
+# claude
+.claude/
