@@ -1,19 +1,36 @@
 """
 harness.py (v2) -- shared toolkit for the Two Drifts project. One copy, both sides.
 
+FROZEN vs ITERABLE:
+  FROZEN (no edits without team sign-off): this file and the Trace schema. Both
+    sides build against it; a change on one side must land on both (R4).
+  ITERABLE (change freely): everything else -- matchers/, data/, scripts/,
+    analysis/. New behavior goes there, plugged in through the documented
+    interfaces (ConclusionMatcher, collect_trace, the outputs/ JSONL), never by
+    editing the engine below.
+
 Supersedes v1. Changes:
   - Trace schema upgraded to the full seven-group v2 spec (flat, single class).
   - Layer 1 commitment: truncation + free rollout (THE commitment definition).
-  - Layer 2 commitment: attention-to-anchor proxy + calibration against Layer 1.
+  - Layer 2 commitment: sink-corrected attention-to-anchor proxy (anchor mass
+    minus length-matched control-span mass, sink tokens excluded from both)
+    + calibration against Layer 1.
   - Margin demoted to secondary proxy (kept, never the definition, never an
     extraction regression target).
   - flip fields are CELL-level (computed across resamples), not per-row labels.
   - Three-way split: extraction | selection | heldout.
   - Multi-layer steering with recorded vector norms.
 
-Model-agnostic across Llama- and Qwen2-family HF models (layers at
-model.model.layers[i]). Layer 2 attention capture requires the model to be
-loaded with attn_implementation="eager".
+SCHEMA trace-v0.3 (schema_version="trace-v0.3"). Field-complete for v0.3; two
+fields are DECLARED BUT NEVER POPULATED pending an agreed estimator spec --
+see SCHEMA_PENDING_FIELDS. Do not read the version string as "every field has a
+value"; read it as "every field exists". Added since trace-v2:
+  - Layer 2 sink correction (control_spans, attn_to_control, sink_exclude_k).
+  - R5 rollout CLOSURE tracking (rollout_closure_rates) -- see below.
+  - conclusion_key (canonical; final_answer kept as a deprecated mirror),
+    rollout_prefix_fracs, dtype, attn_implementation, prompt_tokens,
+    total_tokens, matcher_agreement_rate, calibration_model,
+    shape_bic_delta / shape_max_drop (pending).
 
 RULES ENCODED HERE (do not weaken without team sign-off):
   R1. rollout_outcomes is the commitment definition. attn_to_anchor and
@@ -22,6 +39,19 @@ RULES ENCODED HERE (do not weaken without team sign-off):
       (calibrated_under_steering=False) has an UNUSABLE proxy.
   R3. split is assigned at generation time and never re-tagged.
   R4. Any schema field added on one side must be added on both.
+  R5. A rollout that hits max_new_tokens before emitting </think> never
+      committed to ANYTHING -- it is not evidence of changing its mind. Early
+      prefixes need more tokens to finish than late ones, so counting those
+      truncations as misses manufactures a rising curve out of the token cap.
+      rollout_closure_rates records the fraction that actually closed at each
+      prefix; a curve whose closure rate is low or climbing with prefix index
+      is measuring the cap, not commitment. Because no matcher can match an
+      unclosed completion (all return None without </think>), hits are a subset
+      of closures, so P(conclusion | closed) == rollout_outcomes / closure_rate.
+
+Model-agnostic across Llama- and Qwen2-family HF models (layers at
+model.model.layers[i]). Layer 2 attention capture requires the model to be
+loaded with attn_implementation="eager".
 """
 
 import hashlib
@@ -36,8 +66,13 @@ import torch
 import torch.nn.functional as F
 from transformers import LogitsProcessor
 
-HARNESS_VERSION = "0.2.0"
-SCHEMA_VERSION = "trace-v2"
+HARNESS_VERSION = "0.3.0"
+SCHEMA_VERSION = "trace-v0.3"
+
+# Declared in the schema but never populated yet: the shape estimator is not
+# agreed. Readers must treat these as absent, not as "no effect". Populate them
+# (and drop them from this tuple) once the estimator is pre-registered.
+SCHEMA_PENDING_FIELDS = ("shape_bic_delta", "shape_max_drop")
 
 VALID_SPLITS = ("extraction", "selection", "heldout")
 VALID_INDUCTION = ("natural", "hijack_preamble")
@@ -63,7 +98,9 @@ class Trace:
     budget_condition: str             # "natural" | "256" | ... | "16384"
     thinking_tokens: int
     response_text: str
-    final_answer: Optional[str]       # math: number | safety: "refuse"|"comply"
+    final_answer: Optional[str]       # DEPRECATED mirror of conclusion_key; kept
+                                      # so trace-v2 readers keep working. Write
+                                      # both; read conclusion_key.
     outcome: str                      # math: correct|incorrect ; safety: refused|complied
     gold: str
     scorer_version: str
@@ -79,6 +116,17 @@ class Trace:
     scorer_confidence: Optional[float] = None
     sample_idx: int = 0               # which resample of this cell
     n_samples_per_cell: int = 1
+    # v0.3: canonical conclusion label (math: number | safety: refuse|comply).
+    # None == the trace never committed (no </think> / no extractable answer).
+    conclusion_key: Optional[str] = None
+    # v0.3: run provenance -- these change the numbers, so they belong on the row.
+    dtype: str = ""                   # "bfloat16" | "float16" | "float32"
+    attn_implementation: str = ""     # "sdpa" | "eager" (eager required for Layer 2)
+    prompt_tokens: int = -1
+    total_tokens: int = -1
+    # v0.3: agreement between the scorer of record and a cross-check matcher.
+    # Safety side only (classifier vs. heuristic); None when no cross-check ran.
+    matcher_agreement_rate: Optional[float] = None
 
     # ---- GROUP 2: flip / pairing. CELL-level, stamped onto rows by
     #      compute_cell_stats(). Never hand-set from a single run at temp 0.6.
@@ -89,24 +137,43 @@ class Trace:
 
     # ---- GROUP 3: commitment, Layer 1 (rollout ground truth). THE definition.
     rollout_prefix_positions: list = field(default_factory=list)  # absolute token idx, inside think block
+    rollout_prefix_fracs: list = field(default_factory=list)  # v0.3: same prefixes as fraction through the think block
     n_rollouts_per_prefix: int = 0
     rollout_outcomes: list = field(default_factory=list)  # per prefix: fraction reaching trace's final conclusion
+    # v0.3 (R5): per prefix, fraction of rollouts that emitted </think> before
+    # max_new_tokens. MANDATORY alongside rollout_outcomes -- without it you
+    # cannot tell commitment from the token cap. Unclosed rollouts can never
+    # match, so P(conclusion | closed) == rollout_outcomes[j] / closure[j].
+    rollout_closure_rates: list = field(default_factory=list)
+    rollout_max_new_tokens: Optional[int] = None  # v0.3: the cap closure is relative to
     rollout_completion_texts: list = field(default_factory=list)  # optional, list[list[str]]
     rollout_decode_temp: Optional[float] = None
     rollout_decode_top_p: Optional[float] = None
     rollout_seed: Optional[int] = None
 
     # ---- GROUP 4: commitment, Layer 2 (cheap proxies) ----
-    anchor_spans: list = field(default_factory=list)      # [[start, end), ...] absolute token idx
+    anchor_spans: list = field(default_factory=list)      # [[start, end), ...] absolute token idx, sink-excluded
     anchor_policy: Optional[str] = None                   # pre-registered
     attn_norm_method: Optional[str] = None                # pre-registered
     attn_to_anchor: list = field(default_factory=list)    # one value per generated-token position
+    sink_exclude_k: int = 4                               # first k prompt positions excluded from every span
+    control_spans: list = field(default_factory=list)     # length-matched non-anchor prompt spans
+    control_span_len: Optional[int] = None                # actual total control tokens (== anchor len when possible)
+    attn_to_control: list = field(default_factory=list)   # one value per generated-token position
     attn_layers_used: list = field(default_factory=list)
     calibration_id: Optional[str] = None
+    calibration_model: Optional[str] = None               # v0.3: model the cal was fit on;
+                                                          # a cal is invalid across models
     calibrated_under_steering: bool = False               # R2
     commitment_margin: list = field(default_factory=list)  # SECONDARY proxy only
     entropy_trace: list = field(default_factory=list)
     shape: str = "unlabeled"          # "gradual" | "cliff" | "unlabeled"
+    # v0.3, PENDING (see SCHEMA_PENDING_FIELDS): declared so the schema is
+    # field-complete, but never written -- the shape estimator is not agreed.
+    # None here means "not computed", NOT "no effect". Do not infer shape from
+    # nulls; do not populate without pre-registering the estimator.
+    shape_bic_delta: Optional[float] = None
+    shape_max_drop: Optional[float] = None
 
     # ---- GROUP 5: activations. Tensors live in a sidecar npz (see io);
     #      the row stores the pointer + indices. (Flagged deviation from the
@@ -147,16 +214,38 @@ def validate_trace(t: Trace, stage: str = "surface"):
         errs.append(f"bad induction {t.induction!r}")
     if t.domain == "math" and t.induction != "natural":
         errs.append("math rows must have induction='natural'")
+    if t.conclusion_key != t.final_answer:
+        errs.append("final_answer must mirror conclusion_key (deprecated alias)")
     if stage in ("metric", "steered"):
         if not t.rollout_prefix_positions or not t.rollout_outcomes:
             errs.append("metric stage requires Layer 1 rollout fields (R1)")
         if len(t.rollout_prefix_positions) != len(t.rollout_outcomes):
             errs.append("rollout positions/outcomes length mismatch")
+        # R5: a curve without closure rates is uninterpretable -- you cannot
+        # separate commitment from the token cap. Refuse to call it valid.
+        if not t.rollout_closure_rates:
+            errs.append("R5 violation: rollout_outcomes present without "
+                        "rollout_closure_rates; curve cannot be distinguished "
+                        "from a max_new_tokens artifact")
+        elif len(t.rollout_closure_rates) != len(t.rollout_outcomes):
+            errs.append("rollout outcomes/closure_rates length mismatch")
+        else:
+            for j, (o, c) in enumerate(zip(t.rollout_outcomes,
+                                           t.rollout_closure_rates)):
+                # hits are a subset of closures for every conforming matcher
+                if o > c + 1e-9:
+                    errs.append(f"prefix {j}: outcome {o} exceeds closure {c}; "
+                                "matcher matched an unclosed completion")
         if t.attn_to_anchor:
             if t.anchor_policy not in VALID_ANCHOR_POLICY:
                 errs.append("attn_to_anchor present without valid anchor_policy")
             if t.attn_norm_method not in VALID_ATTN_NORM:
                 errs.append("attn_to_anchor present without valid attn_norm_method")
+            if not t.attn_to_control:
+                errs.append("attn_to_anchor present without attn_to_control "
+                            "(sink correction is mandatory)")
+            elif len(t.attn_to_control) != len(t.attn_to_anchor):
+                errs.append("attn_to_anchor/attn_to_control length mismatch")
     if stage == "steered":
         if t.steering_condition == "none":
             errs.append("steered stage but steering_condition='none'")
@@ -395,16 +484,29 @@ def rollout_commitment_curve(model, tokenizer, full_ids, prefix_positions,
     """
     Layer 1. For each prefix position p: continue freely n_rollouts times from
     full_ids[:p], score each completion with conclusion_match_fn, and record
-    the fraction that reach the trace's final conclusion.
+    both the fraction reaching the trace's final conclusion AND the fraction
+    that actually closed (emitted </think>) before max_new_tokens.
 
-    Returns (curve, texts):
-      curve: list of floats, one per prefix (the commitment curve)
-      texts: list[list[str]] if store_texts else []
+    Returns (curve, closure_rates, texts):
+      curve:         list of floats, one per prefix (the commitment curve)
+      closure_rates: list of floats, one per prefix -- fraction of rollouts that
+                     emitted </think> before the cap
+      texts:         list[list[str]] if store_texts else []
+
+    Why closure_rates is not optional (R5): a rollout truncated by
+    max_new_tokens never committed to anything, but conclusion_match_fn scores
+    it exactly like a rollout that genuinely reached a different conclusion.
+    Early prefixes have more reasoning left to emit, so they are truncated more
+    often than late prefixes -- which alone produces a rising curve with no
+    commitment in it. Read the curve only where closure_rate is high and flat;
+    P(conclusion | closed) == curve[j] / closure_rates[j].
+
     Cost: len(prefix_positions) * n_rollouts generations. Batched via
     num_return_sequences per prefix.
     """
-    curve, all_texts = [], []
+    curve, closure_rates, all_texts = [], [], []
     eos_id = tokenizer.eos_token_id
+    think_end_id = get_think_end_id(tokenizer)
     for j, p in enumerate(prefix_positions):
         torch.manual_seed(base_seed + 1009 * j)
         prefix = full_ids[:, :p]
@@ -413,27 +515,73 @@ def rollout_commitment_curve(model, tokenizer, full_ids, prefix_positions,
             do_sample=True, temperature=temperature, top_p=top_p,
             num_return_sequences=n_rollouts, pad_token_id=eos_id,
         )
-        texts = [
-            tokenizer.decode(out[k][p:], skip_special_tokens=False)
-            for k in range(n_rollouts)
-        ]
-        hits = sum(1 for t in texts if conclusion_match_fn(_ensure_closed(t)))
+        texts, closed = [], []
+        for k in range(n_rollouts):
+            gen_ids = out[k][p:]
+            # closed == the rollout left the think block under its own steam.
+            # Checked on token ids, not text, so it can't be fooled by decoding.
+            closed.append(bool((gen_ids == think_end_id).any().item()))
+            texts.append(tokenizer.decode(gen_ids, skip_special_tokens=False))
+        hits = sum(1 for t in texts if conclusion_match_fn(t))
         curve.append(hits / n_rollouts)
+        closure_rates.append(sum(closed) / n_rollouts)
         if store_texts:
             all_texts.append(texts)
-    return curve, all_texts
-
-
-def _ensure_closed(text):
-    """Rollouts from mid-think may or may not emit </think>; the math answer
-    extractor requires it. If absent, the rollout never committed: leave as-is
-    so the matcher returns False."""
-    return text
+    return curve, closure_rates, all_texts
 
 
 # =============================================================================
-# LAYER 2: ATTENTION-TO-ANCHOR. Cheap proxy; calibrate against Layer 1.
+# LAYER 2: SINK-CORRECTED ATTENTION-TO-ANCHOR. Cheap proxy; calibrate against
+# Layer 1. Signal = attn_to_anchor - attn_to_control, sink tokens excluded from
+# both spans (raw anchor mass partly measures attention-sink behavior, which
+# concentrates at sequence start and has its own length-dependent decay).
 # =============================================================================
+
+def exclude_sink_tokens(spans, sink_exclude_k):
+    """Clip the first sink_exclude_k token positions (BOS / system-template
+    sinks) out of every [start, end) span; drop spans that become empty."""
+    out = []
+    for s, e in spans:
+        s = max(s, sink_exclude_k)
+        if s < e:
+            out.append([s, e])
+    return out
+
+
+def find_control_span(anchor_spans, prompt_len, sink_exclude_k=4):
+    """Build length-matched, sink-excluded prompt spans that are NOT the anchor
+    (chat-template boilerplate, instruction scaffolding). Targets the same
+    total token count as the anchor spans, or as close as the prompt allows.
+    Returns (control_spans, control_span_len); ([], 0) if no eligible tokens.
+
+    Longest contiguous runs are taken first (fewest fragments), the last run
+    trimmed to hit the target length."""
+    target = sum(e - s for s, e in anchor_spans)
+    in_anchor = [False] * prompt_len
+    for s, e in anchor_spans:
+        for i in range(max(s, 0), min(e, prompt_len)):
+            in_anchor[i] = True
+    runs, start = [], None
+    for i in range(sink_exclude_k, prompt_len):
+        if not in_anchor[i]:
+            if start is None:
+                start = i
+        elif start is not None:
+            runs.append([start, i])
+            start = None
+    if start is not None:
+        runs.append([start, prompt_len])
+    runs.sort(key=lambda r: r[1] - r[0], reverse=True)
+    spans, total = [], 0
+    for s, e in runs:
+        if total >= target:
+            break
+        take = min(e - s, target - total)
+        spans.append([s, s + take])
+        total += take
+    spans.sort()
+    return spans, total
+
 
 def find_prompt_anchor_span(tokenizer, prompt_text, full_ids):
     """Locate the prompt-content tokens (the question / harmful request) inside
@@ -519,7 +667,8 @@ class AttnToAnchorRecorder:
 @torch.no_grad()
 def compute_attn_to_anchor(model, full_ids, layers, anchor_spans):
     """One teacher-forced forward pass; returns {layer: tensor[n_spans, seq]}
-    of raw heads-averaged attention mass onto each anchor span."""
+    of raw heads-averaged attention mass onto each span. Pass anchor and
+    control spans concatenated to measure both in the same pass."""
     seq_len = full_ids.shape[1]
     with AttnToAnchorRecorder(model, layers, anchor_spans, seq_len) as rec:
         model(full_ids)
@@ -558,6 +707,20 @@ def reduce_anchor_mass(per_span_mass_layer, anchor_spans, policy, norm_method,
             vec[q] = m[k, q]
     else:
         raise ValueError(policy)
+    return vec[gen_start_idx:].tolist()
+
+
+def reduce_control_mass(per_span_mass_layer, control_spans, norm_method,
+                        gen_start_idx):
+    """Reduce the control spans' [n_spans, seq] raw-mass tensor to the schema's
+    attn_to_control array. Control spans act as one pooled span: total mass,
+    normalized by total control length under per_token_mean."""
+    vec = per_span_mass_layer.sum(dim=0)  # [seq]
+    if norm_method == "per_token_mean":
+        total = sum(e - s for s, e in control_spans)
+        vec = vec / max(total, 1)
+    elif norm_method != "raw_mass":
+        raise ValueError(norm_method)
     return vec[gen_start_idx:].tolist()
 
 

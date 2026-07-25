@@ -1,0 +1,4 @@
+# Dev tooling for lint + tests (mirrors what CI runs). Not needed to collect
+# traces. Install into the venv:  pip install -r requirements-dev.txt
+ruff==0.15.21
+pytest>=8
