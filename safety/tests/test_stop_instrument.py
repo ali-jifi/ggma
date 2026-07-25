@@ -1,14 +1,8 @@
-"""Tests for the v0.4 budget-forcing Control statistic (R6) and the multi-eos fix.
+"""Tests for the v0.3.1 budget-forcing marker (R6), the _SuppressUntil mask, and the
+multi-eos fix.
 
 Needs torch (for the logits tensors) but NO model download and NO GPU: _SuppressUntil is
 driven directly with hand-built score rows, and get_eos_ids is driven with stub objects.
-
-The ordering assertion here is the load-bearing one. _SuppressUntil reads `scores` BEFORE
-masking and calls argmax on it; that is only a valid "the model wanted to stop" signal if
-user logits_processors run BEFORE the Temperature/TopK/TopP warpers. We assert the
-consequence rather than trusting the transformers version: if a future release reorders,
-stop_prob_* silently becomes a post-temperature quantity and the argmax silently becomes
-the argmax of a truncated distribution.
 
 Run:  python3 -m pytest safety/tests/test_stop_instrument.py -q
 """
@@ -34,74 +28,17 @@ def _scores(top_id, n=VOCAB):
     return row
 
 
-# --- the Control statistic ----------------------------------------------------
-
-def test_records_which_stop_token_the_model_wanted():
-    supp = H._SuppressUntil([THINK, EOS_A, EOS_B], until=4,
-                            temperature=1.0, think_end_id=THINK)
-    # step 0: wants a normal word. 1: wants </think>. 2: wants eos. 3: </think> again.
-    for top in (WORD, THINK, EOS_A, THINK):
-        supp(None, _scores(top))
-    s = supp.stats()
-    assert s["stop_suppressed_steps"] == 4, s
-    assert s["stop_wanted_steps_think"] == 2, s      # think and eos kept SEPARATE
-    assert s["stop_wanted_steps_eos"] == 1, s
-    assert s["stop_wanted_first_step"] == 1, s       # 0-based, first time either fired
-
-
-def test_zero_is_not_none_and_denominator_is_stored():
-    """A model that never tried to stop must read 0, not None: 0 is a measurement."""
-    supp = H._SuppressUntil([THINK, EOS_A], until=3, think_end_id=THINK)
-    for _ in range(3):
-        supp(None, _scores(WORD))
-    s = supp.stats()
-    assert s["stop_wanted_steps_think"] == 0 and s["stop_wanted_steps_eos"] == 0
-    assert s["stop_wanted_first_step"] is None       # never fired
-    assert s["stop_suppressed_steps"] == 3           # the denominator, so rates compare
-
+# --- _SuppressUntil masks every stop id for the whole budget ------------------
 
 def test_masks_every_stop_id_and_stops_masking_after_budget():
-    supp = H._SuppressUntil([THINK, EOS_A, EOS_B], until=1, think_end_id=THINK)
-    row = _scores(THINK)
-    out = supp(None, row)
+    supp = H._SuppressUntil([THINK, EOS_A, EOS_B], until=1)
+    out = supp(None, _scores(THINK))
     assert out[0, THINK] == -float("inf"), "all stop ids must be masked"
     assert out[0, EOS_A] == -float("inf") and out[0, EOS_B] == -float("inf")
     assert out[0, WORD] > -float("inf"), "non-stop tokens must be untouched"
-    # past `until`, nothing is masked and nothing is recorded
+    # past `until`, nothing is masked
     row2 = supp(None, _scores(THINK))
     assert row2[0, THINK] == 5.0
-    assert supp.stats()["stop_suppressed_steps"] == 1
-
-
-def test_reads_scores_before_masking():
-    """The argmax must be taken on the INCOMING row. If it were read after masking, a
-    step where the model wanted to stop would score as "wanted a word" -- the statistic
-    would read 0 for exactly the traces it exists to detect."""
-    supp = H._SuppressUntil([THINK], until=1, think_end_id=THINK)
-    supp(None, _scores(THINK))
-    assert supp.stats()["stop_wanted_steps_think"] == 1
-
-
-def test_batch_size_one_is_enforced():
-    """scores[:, t] = -inf masks the WHOLE batch off one shared step counter."""
-    supp = H._SuppressUntil([THINK], until=2, think_end_id=THINK)
-    try:
-        supp(None, torch.full((2, VOCAB), -1.0))
-        raise AssertionError("batched forcing must raise, not silently mis-count")
-    except ValueError as e:
-        assert "batch size 1" in str(e)
-
-
-def test_stop_prob_is_on_the_sampling_scale():
-    """stop_prob_* divides by temperature so it is comparable to what the sampler saw.
-    It is an UPPER bound (top_p is applied after us and is not modelled)."""
-    hot = H._SuppressUntil([THINK], until=1, temperature=0.5, think_end_id=THINK)
-    cold = H._SuppressUntil([THINK], until=1, temperature=2.0, think_end_id=THINK)
-    hot(None, _scores(THINK))
-    cold(None, _scores(THINK))
-    # lower temperature sharpens toward the argmax, so more mass on the stop token
-    assert hot.stats()["stop_prob_max"] > cold.stats()["stop_prob_max"]
-    assert 0.0 <= cold.stats()["stop_prob_max"] <= 1.0
 
 
 # --- Bug 2: the eos union ------------------------------------------------------
@@ -181,15 +118,6 @@ def test_cut_at_first_stop_is_one_shared_rule():
     assert H.cut_at_first_stop(torch.tensor([]), {2}).numel() == 0
 
 
-if __name__ == "__main__":
-    fns = [v for k, v in sorted(globals().items())
-           if k.startswith("test_") and callable(v)]
-    for fn in fns:
-        fn()
-        print("ok", fn.__name__)
-    print(f"{len(fns)} stop-instrument tests passed")
-
-
 # --- R6: validate_trace gates on forcing_method, not budget_condition ----------
 
 def _trace(**kw):
@@ -215,53 +143,45 @@ def _errs(**kw):
         return str(e).split("; ")
 
 
-def test_natural_row_needs_no_control_stats():
+def test_natural_row_needs_no_forcing_marker():
     assert not [e for e in _errs(forcing_method="none") if "R6" in e]
 
 
-def test_pre_v04_forced_row_is_rejected():
-    """A forced row with no forcing_method is exactly the row whose thinking_tokens was
-    never a measurement. Refusing it is the point."""
+def test_forced_row_without_a_marker_is_rejected():
+    """A non-natural row with no forcing_method is exactly the row whose thinking_tokens
+    was never a measurement. Refusing it is the point."""
     errs = _errs(budget_condition="512", thinking_tokens=512)
     assert any("R6 violation" in e and "forcing_method" in e for e in errs), errs
 
 
-def test_clipping_row_is_accepted_without_stop_stats():
-    """Stage C thinking-clipping is non-natural and never invokes _SuppressUntil, so it
-    legitimately has no stop_*. Gating on budget_condition would reject the plan's own
-    recommended drift method."""
+def test_clipping_row_is_accepted():
+    """Stage C thinking-clipping is non-natural; gating on budget_condition would reject
+    the plan's own recommended drift method."""
     errs = _errs(budget_condition="512", thinking_tokens=337, forcing_method="clipping")
     assert not [e for e in errs if "R6" in e], errs
-
-
-def test_suppression_row_requires_the_control_statistic():
-    errs = _errs(budget_condition="512", thinking_tokens=512, forcing_method="suppression")
-    assert any("stop_suppressed_steps" in e for e in errs), errs
 
 
 def test_bug2_canary_fires_when_a_stop_id_escaped():
     """thinking_tokens != budget under suppression means an unsuppressed stop id ended
     pass 1 early -- the exact silent Qwen3 failure."""
-    errs = _errs(budget_condition="512", thinking_tokens=311,
-                 forcing_method="suppression", stop_suppressed_steps=311,
-                 stop_wanted_steps_think=0, stop_wanted_steps_eos=0)
+    errs = _errs(budget_condition="512", thinking_tokens=311, forcing_method="suppression")
     assert any("escaped suppression" in e for e in errs), errs
 
 
 def test_healthy_suppression_row_passes():
-    errs = _errs(budget_condition="512", thinking_tokens=512,
-                 forcing_method="suppression", stop_suppressed_steps=512,
-                 stop_wanted_steps_think=3, stop_wanted_steps_eos=1)
+    errs = _errs(budget_condition="512", thinking_tokens=512, forcing_method="suppression")
     assert not [e for e in errs if "R6" in e or "escaped" in e], errs
-
-
-def test_wanted_cannot_exceed_the_denominator():
-    errs = _errs(budget_condition="512", thinking_tokens=512,
-                 forcing_method="suppression", stop_suppressed_steps=5,
-                 stop_wanted_steps_think=9)
-    assert any("exceeds stop_suppressed_steps" in e for e in errs), errs
 
 
 def test_bad_forcing_method_is_rejected():
     assert any("forcing_method must be one of" in e
                for e in _errs(forcing_method="forced"))
+
+
+if __name__ == "__main__":
+    fns = [v for k, v in sorted(globals().items())
+           if k.startswith("test_") and callable(v)]
+    for fn in fns:
+        fn()
+        print("ok", fn.__name__)
+    print(f"{len(fns)} tests passed")
