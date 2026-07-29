@@ -5,16 +5,18 @@
 # transformers-stream-generator). What remains loads a HF causal-LM, runs harness.py
 # + steering_primitives.py, and the HarmBench classifier.
 #
-# transformers 4.44.2 covers the Qwen2-family debug/anchor models
-# (DeepSeek-R1-Distill-Qwen-1.5B/14B, DeepSeek-R1-Distill-Llama-8B/70B).
-# BUMP to transformers>=4.51 before running Qwen3-14B / Qwen3-30B-A3B (MoE).
+# transformers 4.51.3 supports the Qwen3 family (anchor: Qwen3-14B) as well as the
+# Qwen2-family DeepSeek-R1-Distill models. huggingface-hub bumped to 0.30.2 to satisfy
+# 4.51 (was 4.44.2 / hub 0.23.3 for the DeepSeek-only debug phase). tokenizers is left
+# unpinned so the resolver picks the 0.21.x that 4.51 requires. smoke() (CPU, ~$0)
+# validates the resolved set before any GPU dollar.
 
 # --- core: model + steering + harness ---
 torch==2.3.0
-transformers==4.44.2
+transformers==4.51.3
 accelerate==0.31.0
 safetensors==0.4.3
-huggingface-hub==0.23.3
+huggingface-hub==0.30.2
 sentencepiece==0.2.0
 protobuf==5.27.1
 numpy==1.26.4           # harness.py

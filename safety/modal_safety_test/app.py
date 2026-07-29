@@ -70,8 +70,8 @@ CACHE_DIR = "/cache"                                   # HF cache + direction ca
 ACT_LAYERS = (8, 12, 16, 20, 24)
 
 # --- model config (swap MODEL_PATH to change models) --------------------------
-MODEL_PATH = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"   # debug model (agreed by the team)
-MODEL_ALIAS = "deepseek-r1-distill-qwen-1.5b"
+MODEL_PATH = "Qwen/Qwen3-14B"                              # anchor (2026-07-28; same family as the local Qwen3-4B shakedown)
+MODEL_ALIAS = "qwen3-14b"
 # Debug : DeepSeek-R1-Distill-Qwen-1.5B
 # Later : DeepSeek-R1-Distill-Llama-8B
 # Anchor: DeepSeek-R1-Distill-Qwen-14B  /  Qwen3-14B      (bump transformers>=4.51 for Qwen3)
@@ -589,7 +589,7 @@ def batch_equivalence() -> dict:
     return _jsonify(report)
 
 
-@app.function(image=image, gpu="L4", timeout=3600, retries=0, secrets=[hf_secret],
+@app.function(image=image, gpu="L40S", timeout=3600, retries=0, secrets=[hf_secret],
               volumes={CACHE_DIR: hf_cache})
 def collect(dataset: str = DATASET_NAME, n: int = 12, budgets: str = "natural",
             samples: int = 4, rollouts: int = 0, prefixes: int = 6,

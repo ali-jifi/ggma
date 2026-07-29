@@ -12,3 +12,6 @@ commitment/outputs/traces/*.jsonl
 commitment/outputs/activations/*.npz
 commitment/outputs/figures/
 commitment/outputs/*_report.json
+
+# local-only run outputs (harmful trace completions live here; never commit)
+do_not_track/
