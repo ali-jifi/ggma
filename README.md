@@ -51,6 +51,7 @@ repo-level config sit at the root.
 ```
 harness.py                        engine (FROZEN with the schema; no edits without sign-off)
 requirements*.txt, ruff.toml      repo-level config
+.env.example                      credentials + GPU selection template (copy to .env; git-ignored)
 .github/workflows/ci.yml          CI (lint + torch-free tests)
 commitment/
   matchers/
@@ -77,6 +78,14 @@ commitment/
     activations/*.npz             activation sidecars
     calibrations/*.json           saved isotonic fits
     figures/*.png                 plots
+safety/                           safety-side workspace (see safety/README.md)
+  run_config.py                   the experiment constants -- one copy, both launchers
+  collect_core.py                 the collection loop      -- one copy, both launchers
+  judge_core.py                   the HarmBench-13B judge  -- one copy, both launchers
+  modal_safety_test/              launcher: Modal serverless GPUs
+  jupyterhub/                     launcher: the research program's A100 JupyterHub box
+  vendor/                         fetched datasets + the vendored judge (data git-ignored)
+  outputs/                        run artifacts (git-ignored)
 ```
 
 The drivers put both `commitment/` (for `matchers`/`data`/`analysis`/`scripts`)

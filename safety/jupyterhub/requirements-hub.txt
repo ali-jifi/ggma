@@ -1,0 +1,24 @@
+# Python deps for running the safety eval on the JupyterHub A100 box.
+#
+# THE PINS ARE NOT RESTATED HERE. They are included from the file the Modal image
+# already uses, so the hub environment and the Modal container run the same
+# transformers/accelerate/numpy — a version skew between them would make two runs
+# non-comparable while both look fine. If a pin needs to change, change it there.
+-r ../vendor/requirements-modal.txt
+
+# --- hub-only additions -------------------------------------------------------
+pytest>=8            # smoke ladder rung 4 (the torch-free invariants)
+
+# TORCH, AND WHEN NOT TO INSTALL IT FROM HERE.
+# The pin above (torch==2.3.0) is the version the Modal runs used, and PyPI's default
+# wheel is a CUDA 12.1 build, which is fine on an A100. But JupyterHub images usually
+# ship their own CUDA-matched torch, and overwriting it in the hub's own python can
+# break the kernel for everything else on the box.
+#
+#   ./run.sh setup                 builds safety/jupyterhub/.venv and installs the pin
+#                                  (isolated; the hub's python is untouched)
+#   SKIP_VENV=1 ./run.sh setup     installs into the CURRENT python and SKIPS torch,
+#                                  keeping whatever the image shipped
+#
+# Whichever you use, the torch version actually loaded is recorded in every run's
+# run_meta.json, so a run can never silently claim a version it did not use.

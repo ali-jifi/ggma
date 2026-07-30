@@ -13,5 +13,13 @@ commitment/outputs/activations/*.npz
 commitment/outputs/figures/
 commitment/outputs/*_report.json
 
-# safety run outputs (Modal collect/judge) — data, not recipe; kept local per-clone
+# safety run outputs (Modal / JupyterHub collect+judge) — data, not recipe; per-clone
 safety/outputs/
+
+# secrets. .env holds the JupyterHub password and the HF token; .env.example is the
+# committed template and must stay tracked. Both search locations are listed because
+# safety/jupyterhub/env_loader.py reads either (repo-root first, hub-local overrides).
+.env
+.env.*
+!.env.example
+safety/jupyterhub/.env

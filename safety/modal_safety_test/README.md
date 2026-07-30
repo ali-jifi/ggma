@@ -9,6 +9,11 @@ table + aggregate ASR + harness `Trace` rows.
 > **Nothing has been run yet.** Do the one-time setup below, then launch it yourself.
 > (Safety side of the group project; the math side lives in its own directory.)
 
+> **Running on the JupyterHub A100 box instead?** See `../jupyterhub/README.md`. Same
+> experiment, different hardware: the constants (`../run_config.py`), the collection
+> loop (`../collect_core.py`) and the judge (`../judge_core.py`) are shared, so the two
+> launchers cannot report different numbers from the same config.
+
 ## Design (DEEP integration)
 
 - **Generation + steering run on the shared `harness.py`** (repo root) +
@@ -106,7 +111,12 @@ long — `MAX_NEW_TOKENS` (default 2048) and the L4 `timeout` (3600s) are tunabl
 ## Files
 
 - `app.py` — the Modal app: image, Volume, Secret, and `smoke` / `generate` (L4) /
-  `judge` (L40S) / `export_traces` functions + the `main` local entrypoint.
+  `collect` / `judge` (L40S) / `export_traces` functions + the `main` and
+  `judged_collect` local entrypoints. `collect` and `judge` are thin wrappers: the
+  loop lives in `../collect_core.py` and the judge in `../judge_core.py`, both shared
+  with the JupyterHub launcher.
+- `../run_config.py` — the experiment constants (model, extraction layer/pos, decode
+  settings, dataset filenames), imported by both launchers so they cannot drift.
 - `trace_export.py` — maps `generate`+`judge` output to harness `Trace` rows (in-container).
 - `report.py` — stdlib renderers for `results.md` (table) and `scores.txt` (compact ASR).
 - `run.sh` — launcher that tees the full terminal output into the run folder.
