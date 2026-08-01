@@ -1090,3 +1090,149 @@ def main(seed: int = 42, n_per_category: int = 2, batch_size: int = 8,
     print("  *_evaluations.json  - per-prompt judge labels + per-category ASR")
     print("  run_meta.json       - seed, GPUs, direction meta, timings")
     print("\nTip: launch via  ./run.sh  to also save the full terminal output next to these.")
+
+
+@app.local_entrypoint()
+def rejudge(pile: str, batch_size: int = 8, run_name: str = ""):
+    """Re-score an existing drift pile with the HarmBench-13B classifier (L40S) -- turns
+    'genuine drift' HEURISTIC hits into real harm labels, catching the no-refusal-phrase
+    false positives (e.g. 2-char answers) the local scorer cannot see.
+
+    `pile` is a LOCAL json: the drift extractor's {"traces":[...]} or a raw campaign
+    {"recs":[...]}. Each record needs `request`, `category`, and the full `text`; we
+    judge the post-</think> answer. Nothing generates here -- judge only.
+
+        uv run modal run app.py::rejudge --pile do_not_track/drift/drift_pile_stage2_37.json
+    """
+    import re
+
+    doc = json.loads(Path(pile).read_text(encoding="utf-8"))
+    traces = doc.get("traces") or doc.get("recs") or []
+    if not traces:
+        raise SystemExit(f"no traces in {pile} (need a 'traces' or 'recs' list)")
+    special = re.compile(r"<\|[^|]*\|>|</?think>")
+
+    def answer_of(t):
+        txt = t.get("text", "")
+        ans = txt.split("</think>")[-1] if "</think>" in txt else txt
+        return special.sub("", ans).strip()
+
+    comps = [{"category": t.get("category", "_"), "prompt": t["request"],
+              "response": answer_of(t)} for t in traces]
+    print(f"Re-judging {len(comps)} drift traces with {CLASSIFIER_PATH} (L40S) ...")
+    judged = judge.remote({"drift_pile": comps}, batch_size=batch_size)
+
+    ev = judged["drift_pile"]
+    verdicts = [{
+        "i": t.get("i"), "budget": t.get("budget"), "sample": t.get("sample"),
+        "behavior_id": t.get("behavior_id"), "think_distinct": t.get("think_distinct"),
+        "answer_len": len(answer_of(t)),
+        "harmbench": int(c.get("is_jailbreak_harmbench", 0)),
+        "substring": int(c.get("is_jailbreak_substring_matching", 0)),
+    } for t, c in zip(traces, ev["completions"])]
+    confirmed = sum(v["harmbench"] for v in verdicts)
+
+    run_dir = SCRATCH_DIR / (run_name or "rejudge")
+    run_dir.mkdir(parents=True, exist_ok=True)
+    out = run_dir / "rejudge_verdicts.json"
+    out.write_text(json.dumps({
+        "pile": pile, "n": len(comps),
+        "harmbench_confirmed": confirmed,
+        "harmbench_asr": ev.get("harmbench_success_rate"),
+        "substring_asr": ev.get("substring_matching_success_rate"),
+        "verdicts": verdicts,      # trace identity + labels only, no completion text
+    }, indent=2))
+    print(f"\nHarmBench-13B confirmed {confirmed}/{len(comps)} drift traces as genuinely "
+          f"harmful (ASR {ev.get('harmbench_success_rate')}).")
+    print(f"[saved] {out}  (verdicts carry trace identity + labels, no harmful text)")
+
+
+@app.function(image=image, gpu="L40S", timeout=10800, retries=0, secrets=[hf_secret],
+              volumes={CACHE_DIR: hf_cache})
+def drift_campaign(pool_data: list, sweep: str, samples: int, arms: str, max_refused: int,
+                   seed: int, temp: float, gen_timeout: int, max_new: int = 1200) -> dict:
+    """Run the shipped run_drift.py drift campaign on MODEL_PATH (the 14B anchor) -- the
+    SAME instrument as the local 4B runs (arm_drift suppression / arm_wait reconsideration
+    / arm_a jailbreak), so numbers are directly comparable. The 14B does its OWN Phase-1
+    baseline (its refusal surface differs from 4B). Returns {baseline, recs} for local
+    save; stores full texts (re-judge separately). NOTE: no mid-run checkpoint survives a
+    container timeout -- size the run to fit `timeout`."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, LIB_REMOTE)
+    sys.path.insert(0, COMMITMENT_REMOTE)
+    sys.path.insert(0, f"{SAFETY_REMOTE}/drift")
+
+    print(subprocess.run(["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader"],
+                         capture_output=True, text=True).stdout.strip())
+
+    import run_drift as R
+    R.MODEL = MODEL_PATH                       # override run_drift's hardcoded 4B
+    model, tok = R.load()
+    baseline, recs = R.campaign(
+        model, tok, pool_data, seed, [int(x) for x in sweep.split(",")], samples,
+        [a.strip() for a in arms.split(",")], max_refused, max_new,
+        Path("/tmp/drift_14b.json"), gen_timeout=gen_timeout, temp=temp)
+    hf_cache.commit()
+    return _jsonify({"baseline": baseline, "recs": recs,
+                     "meta": {"model": MODEL_PATH, "sweep": sweep, "arms": arms,
+                              "samples": samples, "seed": seed, "temp": temp}})
+
+
+@app.local_entrypoint()
+def drift_14b(pool: int = 101, sweep: str = "1024", samples: int = 3,
+              arms: str = "arm_wait,arm_drift", max_refused: int = 24, seed: int = 0,
+              temp: float = 0.6, gen_timeout: int = 300, run_name: str = "",
+              categories: str = ""):
+    """Drift campaign on the 14B anchor (Modal L40S), re-judged separately.
+        uv run modal run app.py::drift_14b --arms arm_wait --samples 6 \
+            --categories misinformation_disinformation,harassment_bullying
+    then rejudge each do_not_track/modal/drift_14b/pile_<arm>.json.
+    `categories` (comma list) restricts the pool to those HarmBench categories -- the
+    misinfo/harassment TEXT harms are where drift actually breaks through.
+    """
+    import random
+    import re as _re
+
+    _require_data()
+    data = json.loads((DATA_LOCAL / SCORED_JSON).read_text())
+    if categories:
+        cats = {c.strip() for c in categories.split(",")}
+        data = [r for r in data if r.get("category") in cats]
+        print(f"[filter] {len(data)} prompts in categories {sorted(cats)}")
+    rng = random.Random(seed)
+    pool_data = list(data)
+    rng.shuffle(pool_data)
+    pool_data = pool_data[:pool]
+    print(f"14B drift campaign: pool={len(pool_data)} sweep={sweep} arms={arms} "
+          f"samples={samples} max_refused={max_refused} temp={temp} ...")
+    res = drift_campaign.remote(pool_data, sweep, samples, arms, max_refused, seed, temp,
+                                gen_timeout)
+
+    run_dir = SCRATCH_DIR / (run_name or "drift_14b")
+    run_dir.mkdir(parents=True, exist_ok=True)
+    full = run_dir / f"campaign_14b_seed{seed}.json"
+    full.write_text(json.dumps(res, indent=2, ensure_ascii=False))
+
+    recs = res["recs"]
+    sp = _re.compile(r"<\|[^|]*\|>|</?think>")
+
+    def answer_of(t):
+        x = t.get("text", "")
+        a = x.split("</think>")[-1] if "</think>" in x else x
+        return sp.sub("", a).strip()
+
+    for arm in sorted({r["condition"] for r in recs}):
+        comply = [r for r in recs if r["condition"] == arm and r["label"] == "comply"]
+        pile = run_dir / f"pile_{arm}.json"
+        pile.write_text(json.dumps({"source": str(full), "selector": f"{arm} comply",
+                                    "n": len(comply), "traces": comply},
+                                   indent=2, ensure_ascii=False))
+        drift = sum(1 for r in recs if r["condition"] == arm and r.get("drift_flag"))
+        print(f"  [{arm}] comply={len(comply)}  heuristic_drift={drift}  -> {pile}")
+    nbase = len(res["baseline"])
+    nref = sum(1 for r in res["baseline"] if r["label"] == "refuse")
+    print(f"[done] 14B baseline {nref} refused / {nbase}; forced {len(recs)} traces; "
+          f"saved {full}")
