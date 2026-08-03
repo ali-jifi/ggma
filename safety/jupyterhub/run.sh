@@ -12,8 +12,10 @@
 #   ./run.sh hub-check                 verify the JupyterHub credentials in .env
 #   ./run.sh preflight                 cheap checks; run this every session
 #   ./run.sh smoke                     the whole smoke ladder, cheapest first
-#   ./run.sh collect --n 12 ...        the real run  (tees the terminal output)
+#   ./run.sh clip --n 12 ...           the CLIPPING arm: one natural gen, many cut points
+#   ./run.sh collect --n 12 ...        the FORCED arm: ceiling / suppression budgets
 #   ./run.sh judge --run <name>        re-score a checkpoint, no re-generation
+#   ./run.sh fetch --list | --run <n>  copy run outputs OFF the hub onto this machine
 #   ./run.sh shell                     a subshell with the GPUs pinned and venv active
 #
 # GPU selection comes from SAFETY_GPUS in .env (we agreed on 4,5). Override per run:
@@ -47,7 +49,7 @@ else
     PY="$(command -v python3)"
 fi
 
-usage() { sed -n '2,21p' "$SELF" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,22p' "$SELF" | sed 's/^# \{0,1\}//'; }
 
 # --- pin the GPUs for this shell and everything it spawns ---------------------
 # gpu.py --export prints `export CUDA_...` on stdout and the board on stderr, and
@@ -179,6 +181,30 @@ collect)
     # 2>&1 merges stderr; tee shows it live AND writes the file. pipefail propagates
     # the runner's exit code rather than tee's.
     "$PY" run_local.py collect "${args[@]}" 2>&1 | tee "$out_dir/terminal_output.txt"
+    ;;
+
+clip)
+    # Same wrapper as collect: name the run up front so this script and the runner
+    # agree on the folder, then tee. Only the subcommand differs.
+    args=("$@")
+    run_name="$(find_flag --run-name ${args[@]+"${args[@]}"})"
+    if [[ -z "$run_name" ]]; then
+        run_name="clip-$(date +%Y%m%d-%H%M%S)"
+        args+=(--run-name "$run_name")
+    fi
+    out_dir="$(out_base)/$run_name"
+    mkdir -p "$out_dir"
+    echo "Run name: $run_name"
+    echo "Saving full terminal output to: $out_dir/terminal_output.txt"
+    echo
+    pin_gpus
+    "$PY" run_local.py clip "${args[@]}" 2>&1 | tee "$out_dir/terminal_output.txt"
+    ;;
+
+fetch)
+    # No GPU, no venv requirement: this is a pure HTTP copy off the hub, and it is the
+    # one command you run from your OWN machine rather than on the box.
+    "$PY" fetch_results.py "$@"
     ;;
 
 judge)

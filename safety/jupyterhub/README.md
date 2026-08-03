@@ -137,7 +137,7 @@ cd safety/jupyterhub
 |---|---|
 | `--rollouts` | **the cost knob.** 0 = surface pass (everything task 1.0b needs). `k` adds `prefixes × k` generations **per trace** — ~90% of a full trace's cost. |
 | `--batch-size` | the ~20× lever, but **surface pass at natural budget only**. Forced budgets share one suppression counter across the batch; rollouts already batch internally. Anything else raises. |
-| `--budgets` | `natural`, or exact thinking-token counts forced by *suppression*. Suppression is not TTBC-2 — nothing here injects "Wait". At `--induction natural` with forced budgets, no induction mechanism is active and a flat curve tells you nothing. |
+| `--budgets` | `natural`, or a thinking-token count. A count **≤ 1024** (`harness.CEILING_MAX_BUDGET`) is a *ceiling* — the model may close `</think>` early, so the arm costs what it used, not the cap. **Above 1024** it is an exact count forced by *suppression*. Neither is TTBC-2 — nothing here injects "Wait". At `--induction natural` with forced budgets, no induction mechanism is active and a flat curve tells you nothing. |
 | `--judge` | HarmBench-13B, the **scorer of record** for 1.0b. Without it you have heuristic labels, which are for plumbing only. |
 | `--device-map` | `auto` shards across both pinned cards (needed for 14B/30B). `cuda:0` keeps the model on GPU 4 so you can run a second job on GPU 5. |
 

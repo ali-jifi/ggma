@@ -178,6 +178,38 @@ def test_bad_forcing_method_is_rejected():
                for e in _errs(forcing_method="forced"))
 
 
+# --- ceiling rows: the invariant is <=, not == ---------------------------------
+
+def test_ceiling_row_under_its_budget_is_accepted():
+    """The whole point of the short arm: an early natural close is data, not a bug."""
+    errs = _errs(budget_condition="512", thinking_tokens=311, forcing_method="ceiling")
+    assert not [e for e in errs if "R6" in e or "ceiling" in e], errs
+
+
+def test_ceiling_row_at_its_budget_is_accepted():
+    """thinking_tokens == budget on this path means the cap closed the block."""
+    errs = _errs(budget_condition="512", thinking_tokens=512, forcing_method="ceiling")
+    assert not [e for e in errs if "R6" in e or "ceiling" in e], errs
+
+
+def test_ceiling_row_over_its_budget_is_rejected():
+    """Over the cap means the cap never bound, so the length is neither the model's
+    choice nor the number we asked for."""
+    errs = _errs(budget_condition="512", thinking_tokens=513, forcing_method="ceiling")
+    assert any("did not bind" in e for e in errs), errs
+
+
+def test_forcing_for_budget_boundary_is_inclusive():
+    """One source of truth for the mechanism, so the marker on the row cannot disagree
+    with the generator that produced it. The threshold is a <=."""
+    assert H.forcing_for_budget(H.CEILING_MAX_BUDGET) == "ceiling"
+    assert H.forcing_for_budget(H.CEILING_MAX_BUDGET + 1) == "suppression"
+    assert H.forcing_for_budget(512) == "ceiling"
+    assert H.forcing_for_budget(2048) == "suppression"
+    # overridable per run, and the override honours the same <=
+    assert H.forcing_for_budget(2048, ceiling_max_budget=2048) == "ceiling"
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

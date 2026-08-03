@@ -218,7 +218,8 @@ def run_collect(model, tokenizer, meta, *, dataset, n=12, budgets="natural",
                 file_split="extract,test", split="all", max_new_tokens=2048,
                 rollout_max_new_tokens=2048, batch_size=1, run_label="1.0b",
                 smoke_one=False, model_alias="", load_seconds=0.0,
-                gpu_label="", usd_per_sec=None, act_layers=(), on_commit=None):
+                gpu_label="", usd_per_sec=None, act_layers=(), on_commit=None,
+                ceiling_max_budget=None, on_rows=None):
     """Collect harness Trace rows for the safety side — `generate` is not this.
 
     `generate` (app.py) runs generate_natural in a serial loop over one budget and
@@ -237,10 +238,24 @@ def run_collect(model, tokenizer, meta, *, dataset, n=12, budgets="natural",
                      that is 64x the generation work, which is ~90% of a full trace's
                      cost. Turn it on once you know there is drift worth curving.
 
-    `budgets` is comma-separated. Anything but "natural" goes through
-    harness.generate_exact_thinking, whose _SuppressUntil masks </think> and eos out of
-    the logits until the budget -- so budget=N always emits exactly N thinking tokens
-    with no early exit. Budget is a hard multiplier on wall-clock, not a cap.
+    `budgets` is comma-separated, and a non-natural budget picks its instrument by SIZE
+    (pipeline._generate, threshold `ceiling_max_budget`, default harness.CEILING_MAX_BUDGET
+    = 1024):
+      budget <= threshold -> harness.generate_capped_thinking. The budget is a CEILING: the
+        model may close </think> early and the cap only bites if it is still reasoning
+        when the cap lands. thinking_tokens <= N and is a real measurement whenever it
+        comes in under, and the arm costs what it actually used rather than the cap.
+      budget >  threshold -> harness.generate_exact_thinking, whose _SuppressUntil masks
+        </think> and eos out of the logits until the budget -- so budget=N emits exactly N
+        thinking tokens with no early exit, and there the budget is a hard multiplier on
+        wall-clock rather than a cap.
+
+    ceiling_max_budget IS THE KNOB THAT DECIDES WHICH ARM A BUDGET GETS, and leaving it at
+    the default silently picks suppression for anything over 1024. A 1536/4096 sweep
+    intending "ceiling short, forced long" must pass ceiling_max_budget=1536, or BOTH arms
+    run under suppression and the short arm's thinking_tokens is the number you typed in
+    rather than a measurement -- the failure the whole R6 marker exists to make visible.
+    The threshold is recorded in the returned meta so a row's instrument is recoverable.
 
     IT IS NOT TTBC-2. The handoff defines BOTH budget-forcing mechanisms as INJECTIONS
     -- TTBC-1 "block the end and inject 'Wait' so it keeps going. Produces the headline
@@ -265,6 +280,12 @@ def run_collect(model, tokenizer, meta, *, dataset, n=12, budgets="natural",
 
     on_commit: optional zero-arg callback run once at the end (Modal uses it to commit
     the Volume; a local run has nothing to commit).
+
+    on_rows: optional callback taking a list of row dicts, invoked as soon as each unit of
+    work completes (one prompt's full budget x sample block on the unbatched path, one
+    sample on the batched one). THIS IS THE CHECKPOINT. Everything else here accumulates
+    `rows` in memory and returns it at the end, which on the forced arm means a crash at
+    minute 80 of 90 loses the entire run -- and the forced arm is measured in hours.
 
     usd_per_sec: None on rented/owned hardware -> the summary reports GPU-seconds and
     omits a dollar figure rather than inventing one.
@@ -308,10 +329,25 @@ def run_collect(model, tokenizer, meta, *, dataset, n=12, budgets="natural",
     good = "refused" if sds_harmful(dataset) else "complied"
     bw = max(len(b) for b in budget_list)          # right-align budgets, as math does
 
+    # The bare request + category, attached to each row AS IT IS BUILT rather than in one
+    # pass at the end. The HarmBench judge scores "did this generation exhibit THIS
+    # behavior", where the behavior is the harmful request and NOT the padded prompt_text
+    # -- and _judge_rows falls back to prompt_text when the key is missing. Attaching late
+    # would mean every checkpointed row was silently re-judgeable only against the wrong
+    # question, which is worse than not checkpointing at all.
+    req_map = {p["prompt_id"]: p for p in prompts}
+
+    def _attach(row):
+        src = req_map.get(row["prompt_id"], {})
+        row["_request"] = src.get("request", row["prompt_text"])
+        row["_category"] = src.get("category", "_")
+        return row
+
     # --- BATCHED FAST PATH -----------------------------------------------------
     # Only where it is provably equivalent: surface pass (rollouts=0), natural budget.
-    # Forced budgets stay unbatched -- _SuppressUntil counts steps for the WHOLE batch,
-    # so it would apply one sequence's budget to all of them. Rollouts stay unbatched --
+    # Forced budgets stay unbatched -- _SuppressUntil counts steps for the WHOLE batch, so
+    # it would apply one sequence's budget to all of them, and a ceiling budget closes each
+    # sequence at its own position. Rollouts stay unbatched --
     # they already batch internally via num_return_sequences.
     # Measured: batch-1 gives ~16-25 tok/s on an L4 (~5% of the card) because the full
     # 3.1GB of weights is re-read per token to serve ONE sequence.
@@ -329,18 +365,22 @@ def run_collect(model, tokenizer, meta, *, dataset, n=12, budgets="natural",
         print(f"[collect] BATCHED surface pass, batch_size={batch_size} "
               f"(batch-1 runs at ~5% of an L4; this is the ~20x lever)")
         for s in range(samples):
+            sample_rows = []
             for tr in surface_traces(
                     model, tokenizer, meta, prompts, matcher, domain="safety",
                     budget_condition="natural", seed=seed + s, decode_temp=GEN_TEMP,
                     decode_top_p=GEN_TOP_P, max_new_tokens=max_new_tokens,
                     batch_size=batch_size, sample_idx=s, n_samples_per_cell=samples,
                     cross_matcher=cross):
-                rows.append(tr.to_json())
+                sample_rows.append(_attach(tr.to_json()))
+            rows.extend(sample_rows)
+            if on_rows is not None:
+                on_rows(sample_rows)              # CHECKPOINT: one sample survived
             print(f"[collect] sample {s+1}/{samples}: {len(rows)} rows, "
                   f"{round(_t.time()-t0)}s")
 
     for i, p in enumerate(prompts if batch_size == 1 else []):
-        short_rate = None
+        short_rate, item_rows = None, []
         print(f"\n------ item {i+1}/{len(prompts)} ({dataset} "
               f"{p['prompt_id'].split('-')[1][:8]}, {p['category']}) ------")
         for budget in budget_list:
@@ -360,8 +400,10 @@ def run_collect(model, tokenizer, meta, *, dataset, n=12, budgets="natural",
                     cross_matcher=cross,
                     layer2=False,
                     split=p["split"], sample_idx=s, n_samples_per_cell=samples,
+                    ceiling_max_budget=ceiling_max_budget,
                 )
-                rows.append(tr.to_json())
+                rows.append(_attach(tr.to_json()))
+                item_rows.append(rows[-1])
                 cell.append(tr)
                 # Count the prefixes actually chosen, not the ceiling requested:
                 # choose_prefix_positions returns AT MOST max_prefixes (the sentence
@@ -395,6 +437,12 @@ def run_collect(model, tokenizer, meta, *, dataset, n=12, budgets="natural",
                 line += f"\n      curve={[round(x, 2) for x in cell[0].rollout_outcomes]} " \
                         f"closure={[round(x, 2) for x in cell[0].rollout_closure_rates]}"
             print(line)
+
+        # CHECKPOINT: this prompt is finished across every budget and sample. Emitting per
+        # prompt rather than per row keeps a partial file from ever holding half a matched
+        # short/long pair, which is the unit every downstream flip statistic reads.
+        if on_rows is not None and item_rows:
+            on_rows(item_rows)
 
     elapsed = _t.time() - t0
     gen_tokens = sum(r["total_tokens"] - r["prompt_tokens"] for r in rows
@@ -516,15 +564,11 @@ def run_collect(model, tokenizer, meta, *, dataset, n=12, budgets="natural",
         print("  This is a 1.0b finding. Escalate before spending on 1.4.")
         print("=" * 70)
 
-    # Attach the bare request + category to each returned row (NOT the frozen Trace --
-    # this is the JSON payload only). The HarmBench judge scores "did this generation
-    # exhibit THIS behavior", where the behavior is the harmful request, NOT the padded
-    # prompt_text. Keyed by prompt_id, which is unique per request.
-    req_map = {p["prompt_id"]: p for p in prompts}
+    # Belt and braces: _attach already ran on every row as it was built (so checkpointed
+    # rows carry the bare request too). Re-running it is idempotent and covers any future
+    # path that appends to `rows` without going through _attach.
     for r in rows:
-        src = req_map.get(r["prompt_id"], {})
-        r["_request"] = src.get("request", r["prompt_text"])
-        r["_category"] = src.get("category", "_")
+        _attach(r)
 
     if on_commit is not None:
         on_commit()
@@ -534,6 +578,12 @@ def run_collect(model, tokenizer, meta, *, dataset, n=12, budgets="natural",
         **meta, "dataset": dataset, "budgets": budget_list, "samples": samples,
         "rollouts": rollouts, "prefixes": prefixes, "induction": induction,
         "preamble_id": preamble_id or None, "seed": seed,
+        # Which budget got which instrument. Without this the same budget_condition
+        # string means "ceiling" in one run and "suppression" in another and nothing on
+        # the row says so -- forcing_method does, per row, but the THRESHOLD that decided
+        # it belongs in the run's provenance.
+        "ceiling_max_budget": (int(ceiling_max_budget)
+                               if ceiling_max_budget is not None else None),
         # The card the run ACTUALLY landed on, read off the device -- `gpu_label` in
         # the summary is what the launcher ASKED for, and on a shared box those are
         # not always the same thing.

@@ -67,9 +67,11 @@ from typing import Optional, Callable
 import numpy as np
 import torch
 import torch.nn.functional as F
-from transformers import LogitsProcessor
+from transformers import (
+    LogitsProcessor, StoppingCriteria, TemperatureLogitsWarper, TopPLogitsWarper,
+)
 
-HARNESS_VERSION = "0.4.1"
+HARNESS_VERSION = "0.4.2"
 # trace-v0.3.1 == the shared schema: math's trace-v0.3 plus ONE field, forcing_method
 # (R6 budget-forcing provenance). The interim trace-v0.4 briefly carried six additional
 # stop_* diagnostics; those were dropped as unused, so the schema narrows back onto the
@@ -93,8 +95,9 @@ VALID_SPLITS = ("extraction", "selection", "heldout")
 VALID_INDUCTION = ("natural", "hijack_preamble")
 # How the reasoning length was produced. The POSITIVE marker every R6 rule keys on --
 # never infer forcing from budget_condition: Stage C thinking-clipping is non-natural yet
-# is a mechanism distinct from suppression.
-VALID_FORCING = ("none", "suppression", "clipping")
+# is a mechanism distinct from suppression. "ceiling" widened this tuple in harness 0.4.2;
+# no FIELD was added, so the schema string stays trace-v0.3.1 and row shape is unchanged.
+VALID_FORCING = ("none", "suppression", "clipping", "ceiling")
 VALID_ANCHOR_POLICY = ("first_anchor", "most_recent_anchor")
 VALID_ATTN_NORM = ("raw_mass", "per_token_mean")
 
@@ -157,6 +160,10 @@ class Trace:
     #   "none"        == natural decoding; thinking_tokens IS the model's chosen length
     #   "suppression" == generate_exact_thinking; thinking_tokens == the budget
     #   "clipping"    == the trace was cut and </think> pasted (Stage C)
+    #   "ceiling"     == generate_capped_thinking; the budget was an UPPER BOUND, so
+    #                    thinking_tokens <= budget and is a real measurement whenever it
+    #                    came in under (thinking_tokens < budget == the model closed
+    #                    </think> itself; == budget == the cap closed it).
     forcing_method: Optional[str] = None
 
     # ---- GROUP 2: flip / pairing. CELL-level, stamped onto rows by
@@ -265,6 +272,14 @@ def validate_trace(t: Trace, stage: str = "surface"):
             # block while the run still "succeeds".
             errs.append(f"forced block is {t.thinking_tokens} tokens but budget is "
                         f"{t.budget_condition}: a stop id escaped suppression")
+    elif t.forcing_method == "ceiling":
+        if str(t.budget_condition).isdigit() and t.thinking_tokens > int(t.budget_condition):
+            # The mirror-image canary. Under a ceiling the ONLY invariant is <=; a row
+            # over the cap means the cap never bound (a miscounted think block, or a
+            # </think> that landed after the answer pass started), and the row's length
+            # is then neither the model's choice nor the number we asked for.
+            errs.append(f"ceiling row ran to {t.thinking_tokens} thinking tokens past a "
+                        f"budget of {t.budget_condition}: the cap did not bind")
     if stage in ("metric", "steered"):
         if not t.rollout_prefix_positions or not t.rollout_outcomes:
             errs.append("metric stage requires Layer 1 rollout fields (R1)")
@@ -402,6 +417,18 @@ def cut_at_first_stop(new_tokens, stop_ids):
 
 
 def build_input_ids(model, tokenizer, prompt):
+    """The user turn, chat-templated. ONE user message, nothing on the assistant side.
+
+    Deliberately no assistant-side prefill hook. A prefill (teacher-forced text injected
+    after the `<think>` opener, as in Path Drift's stage-3 example) would not lengthen
+    reasoning -- it seeds the trace's opening direction, and a model that then complies may
+    simply be continuing a compliance-shaped pattern it was handed rather than eroding an
+    early refusal. It also contaminates Phase 2: excluding the injected POSITIONS from
+    pool_thinking does not remove the injected text's influence on every model-written
+    position after it, which attends back to it. Path Drift's mechanisms are implemented
+    prompt-side instead, where the model writes every token itself
+    (commitment/data/preambles/).
+    """
     messages = [{"role": "user", "content": prompt}]
     ids = tokenizer.apply_chat_template(
         messages, add_generation_prompt=True, return_tensors="pt"
@@ -494,6 +521,104 @@ def generate_natural(model, tokenizer, prompt, max_new_tokens=16384,
     # path. None != 0, and every consumer must filter on forcing_method before
     # aggregating or natural rows dilute the statistic toward zero.
     return text, think_tokens, margins, entropies, out.sequences, None
+
+
+# The budget at which a CEILING stops being the right instrument and forcing starts. At
+# or below it the model is usually still reasoning when the budget lands, so the budget
+# binds as an UPPER bound and an early natural close should be allowed to stand; above it
+# the budget is past what the model produces on its own, so suppression is the only way to
+# reach it. Keyed on the budget's SIZE, never on its position in a sweep -- otherwise
+# budget=512 would mean one mechanism in a 512/2048 run and another in a 256/512 run, and
+# two rows with identical budget_condition would not be the same experiment.
+CEILING_MAX_BUDGET = 1024
+
+
+def forcing_for_budget(budget, ceiling_max_budget=None):
+    """The forcing_method a numeric budget gets. ONE place, so the marker written onto the
+    row can never disagree with the generator that produced it."""
+    cap = CEILING_MAX_BUDGET if ceiling_max_budget is None else ceiling_max_budget
+    return "ceiling" if int(budget) <= int(cap) else "suppression"
+
+
+class _StopOnThinkEnd(StoppingCriteria):
+    """Ends generation once `think_end_id` is emitted, ADDITIVELY -- the model's own stop
+    ids keep working untouched. The obvious alternative, generate(eos_token_id=[think_end_id,
+    eos]), REPLACES generation_config's stop set, which is the failure get_eos_ids documents
+    at length: a Qwen-family model declares several stop ids and a hand-written list drops
+    the ones you forgot. A stopping criterion cannot drop a stop id, because it never
+    touches that list -- it only adds one more way to stop.
+    """
+
+    def __init__(self, think_end_id):
+        self.think_end_id = think_end_id
+
+    def __call__(self, input_ids, scores, **kwargs):
+        return input_ids[:, -1] == self.think_end_id
+
+
+@torch.no_grad()
+def generate_capped_thinking(model, tokenizer, prompt, thinking_budget,
+                             max_answer_tokens=600, temperature=0.6, top_p=0.95,
+                             seed=0):
+    """SHORT-budget arm: the budget is a CEILING, not an exact length.
+
+    Same two-pass shape as generate_exact_thinking (think, then answer) with the
+    suppression mask removed. The model may close </think> whenever it wants; the budget
+    only bites if it is STILL reasoning when the cap lands, and then </think> is pasted on
+    exactly as suppression does it. This is s1 (Muennighoff et al., 2501.19393) case (I) --
+    "if the model generates more thinking tokens than a desired limit, we forcefully end
+    the thinking process" -- and deliberately NOT case (II), which pads a model that
+    wanted to stop out to the full budget and bills you for the padding.
+
+    thinking_tokens is therefore a REAL measurement whenever it comes in under the cap,
+    and which close happened is recoverable from the row with no new schema field:
+    thinking_tokens < budget == the model closed the block itself; == budget == we closed
+    it. (A natural close landing exactly on the cap reads as ours. It is one token wide
+    and errs toward "we cut it off", which is the conservative direction.)
+    """
+    torch.manual_seed(seed)
+    think_end_id = get_think_end_id(tokenizer)
+    # Membership test only -- these ids are NEVER handed to generate(eos_token_id=...);
+    # stopping is left to the model's own criteria plus _StopOnThinkEnd. Used below to
+    # recognise a pass-1 that ended on a raw stop token instead of on </think>.
+    eos_ids = get_eos_ids(model, tokenizer)
+    pad_id = get_pad_id(model, tokenizer)
+    ids = build_input_ids(model, tokenizer, prompt)
+    prompt_len = ids.shape[1]
+
+    out1 = model.generate(
+        ids, max_new_tokens=thinking_budget,
+        do_sample=True, temperature=temperature, top_p=top_p,
+        stopping_criteria=[_StopOnThinkEnd(think_end_id)], pad_token_id=pad_id,
+        return_dict_in_generate=True, output_scores=True,
+    )
+    seq1 = out1.sequences
+    last = int(seq1[0, -1].item())
+    if last != think_end_id:
+        # Still reasoning when the cap landed (the common case), or it emitted a raw stop
+        # token without ever closing the block (rare; same treatment). Force the close, so
+        # every row on this path has a think block that ends in </think> and pass 2 has an
+        # answer to write.
+        if last in eos_ids:
+            seq1 = seq1[:, :-1]
+        seq1 = torch.cat(
+            [seq1, torch.tensor([[think_end_id]], device=model.device)], dim=1
+        )
+    out2 = model.generate(
+        seq1, max_new_tokens=max_answer_tokens,
+        do_sample=True, temperature=temperature, top_p=top_p,
+        pad_token_id=pad_id,
+        return_dict_in_generate=True, output_scores=True,
+    )
+    full = out2.sequences
+    new_tokens = full[0][prompt_len:]
+    text = tokenizer.decode(new_tokens, skip_special_tokens=True)
+    m1, e1 = _scores_to_margin_entropy(out1.scores)
+    m2, e2 = _scores_to_margin_entropy(out2.scores)
+    think_tokens = _count_thinking_tokens(tokenizer, new_tokens)
+    # 6th value is None, as on both sibling paths: provenance rides on forcing_method,
+    # set by the caller (see forcing_for_budget).
+    return (text, think_tokens, list(m1) + list(m2), list(e1) + list(e2), full, None)
 
 
 @torch.no_grad()

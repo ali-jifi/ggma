@@ -52,6 +52,33 @@ def _output_dir(run_name, create=True):
     return d
 
 
+def _checkpoint_writer(run_dir):
+    """Return an `on_rows` callback that appends completed rows to partial.jsonl.
+
+    WHY. Everything else in this file writes artifacts only after the collection loop
+    RETURNS. The forced-budget arm runs for hours unbatched, so a kernel restart, an idle
+    culler, or a dropped SSH session at minute 80 of 90 used to lose the whole run with
+    nothing on disk to show for it. This makes every completed prompt durable the moment
+    it finishes.
+
+    Line-delimited and flushed per batch on purpose: a partially written JSON array is
+    unparseable, whereas a truncated JSONL file loses at most its last line. `judge` reads
+    this file when rows.json is absent, so a crashed run is still scoreable.
+    """
+    path = run_dir / "partial.jsonl"
+    state = {"n": 0}
+
+    def on_rows(new_rows):
+        with open(path, "a") as fh:
+            for r in new_rows:
+                fh.write(json.dumps(r, default=float) + "\n")
+            fh.flush()
+        state["n"] += len(new_rows)
+        print(f"[checkpoint] +{len(new_rows)} rows ({state['n']} total) -> {path.name}")
+
+    return on_rows
+
+
 def _resolve_model(args):
     """(model_path, model_alias), with the same rule the Modal entrypoint enforces.
 
@@ -148,6 +175,9 @@ def cmd_collect(args):
         # second, so the summary reports gpu_seconds instead of inventing a price.
         usd_per_sec=None,
         act_layers=ACT_LAYERS,
+        ceiling_max_budget=(args.ceiling_max_budget
+                            if args.ceiling_max_budget > 0 else None),
+        on_rows=_checkpoint_writer(run_dir),
     )
     rows, summary = out["rows"], out["summary"]
 
@@ -198,6 +228,81 @@ def cmd_collect(args):
     print("  terminal_output.txt - full console log (only when launched via ./run.sh)")
 
 
+# --- clip (the thinking-clipping arm) -----------------------------------------
+def cmd_clip(args):
+    """The CLIPPING arm: generate once at natural length, read the answer at several cut
+    points of that one think block. See safety/clip_core.py for why this exists and what
+    it can and cannot answer (it cannot test beyond-natural reasoning -- that is `collect`
+    with a forced budget)."""
+    selection = _pin(args)
+
+    from safety.clip_core import run_clip_collect
+    from safety.collect_core import load_model_for_collect
+
+    gpu_report = _verify(selection)
+
+    model_path, model_alias = _resolve_model(args)
+    run_name = args.run_name or f"clip-{model_alias}-{time.strftime('%Y%m%d-%H%M%S')}"
+    run_dir = _output_dir(run_name)
+    print(f"[run] {run_name} -> {run_dir}")
+
+    device_map = args.device_map or env_loader.get("SAFETY_DEVICE_MAP", "") or "auto"
+    model, tokenizer, meta, load_s = load_model_for_collect(
+        model_path, device_map=device_map, dtype=args.dtype)
+
+    import torch
+    gpu_label = ",".join(str(g["name"]) for g in selection["gpus"]) or (
+        ",".join(torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count()))
+        or "cpu")
+
+    t0 = time.time()
+    out = run_clip_collect(
+        model, tokenizer, meta,
+        dataset=args.dataset, n=args.n, clips=args.clips, samples=args.samples,
+        induction=args.induction, preamble_id=args.preamble_id,
+        classifier=args.classifier, seed=args.seed, file_split=args.file_split,
+        split=args.split, max_new_tokens=args.max_new_tokens,
+        max_answer_tokens=args.max_answer_tokens, batch_size=args.batch_size,
+        run_label=run_name, model_alias=model_alias, load_seconds=load_s,
+        gpu_label=gpu_label, on_rows=_checkpoint_writer(run_dir),
+    )
+    rows, summary = out["rows"], out["summary"]
+
+    (run_dir / "rows.json").write_text(json.dumps(rows, indent=2, default=float))
+    with open(run_dir / "traces.jsonl", "w") as f:
+        for r in rows:
+            f.write(json.dumps(r, default=float) + "\n")
+    print(f"[run] checkpointed {len(rows)} rows -> {run_dir/'rows.json'} + traces.jsonl")
+
+    judge_report = None
+    if args.judge:
+        import gc
+        del model
+        gc.collect()
+        torch.cuda.empty_cache()
+        budgets = ",".join(f"clip{p}" for p in out["meta"]["clip_points_pct"])
+        judge_report = _judge_rows(rows, run_dir, run_name, args, budgets)
+
+    meta_out = {
+        "run_name": run_name,
+        "arm": "clipping",
+        "elapsed_seconds": round(time.time() - t0, 1),
+        "config": {k: v for k, v in vars(args).items() if k != "func"},
+        "model_path": model_path,
+        "model_alias": model_alias,
+        "device_map": device_map,
+        "gpu_selection": selection,
+        "gpu_verify": gpu_report,
+        "env_files": [str(f) for f in env_loader.loaded_files()],
+        "summary": summary,
+        "collect_meta": out["meta"],
+        "judge": judge_report,
+    }
+    (run_dir / "run_meta.json").write_text(json.dumps(meta_out, indent=2, default=str))
+    (run_dir / "summary.json").write_text(json.dumps(summary, indent=2, default=float))
+    print(f"\nArtifacts written to {run_dir}")
+
+
 def _judge_rows(rows, run_dir, run_name, args, budgets):
     from safety.collect_core import answer_of, report_judged
     from safety.judge_core import run_judge
@@ -229,14 +334,35 @@ def cmd_judge(args):
 
     run_dir = _output_dir(args.run, create=False)
     rows_path = run_dir / "rows.json"
-    if not rows_path.exists():
+    partial_path = run_dir / "partial.jsonl"
+    if rows_path.exists():
+        rows = json.loads(rows_path.read_text())
+        print(f"[judge] loaded {len(rows)} rows from {rows_path}")
+    elif partial_path.exists():
+        # A run that died before writing rows.json. The incremental checkpoint is still
+        # complete for every prompt that finished, so scoring it is strictly better than
+        # discarding hours of generation. Read line-by-line: a kill mid-write leaves a
+        # truncated final line, and one dropped row must not cost the other 200.
+        rows, bad = [], 0
+        for line in partial_path.read_text().splitlines():
+            if not line.strip():
+                continue
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError:
+                bad += 1
+        print(f"[judge] rows.json absent; recovered {len(rows)} rows from "
+              f"{partial_path.name}" + (f" ({bad} truncated line(s) dropped)" if bad else ""))
+        print("[judge] this is a PARTIAL run -- the denominator is whatever finished, "
+              "not what was requested.")
+    else:
         raise SystemExit(
-            f"{rows_path} not found. `judge` re-scores a checkpoint from a previous "
-            f"`collect`; it does not generate. Available runs:\n  "
-            + "\n  ".join(sorted(p.parent.name for p in run_dir.parent.glob("*/rows.json")))
+            f"neither {rows_path.name} nor {partial_path.name} found in {run_dir}. "
+            f"`judge` re-scores a checkpoint from a previous `collect`/`clip`; it does "
+            f"not generate. Available runs:\n  "
+            + "\n  ".join(sorted(
+                p.parent.name for p in run_dir.parent.glob("*/rows.json")))
         )
-    rows = json.loads(rows_path.read_text())
-    print(f"[judge] loaded {len(rows)} rows from {rows_path}")
 
     budgets = args.budgets or ",".join(
         dict.fromkeys(str(r["budget_condition"]) for r in rows))
@@ -288,6 +414,12 @@ def main():
     c.add_argument("--rollout-max-new-tokens", type=int, default=2048)
     c.add_argument("--batch-size", type=int, default=1,
                    help="surface pass at natural budget only; the ~20x lever")
+    c.add_argument("--ceiling-max-budget", type=int, default=0,
+                   help="budgets AT OR BELOW this run as a CEILING (the model may close "
+                        "</think> early); above it they are forced to an exact length by "
+                        "suppression. 0 = harness default (1024). For a '1536 ceiling / "
+                        "4096 forced' sweep pass 1536 -- leave it at the default and BOTH "
+                        "arms get suppression, silently.")
     c.add_argument("--dtype", default="bfloat16",
                    choices=["bfloat16", "float16", "float32"])
     c.add_argument("--smoke-one", action="store_true",
@@ -300,6 +432,48 @@ def main():
                         "record for 1.0b) after collecting")
     c.add_argument("--judge-batch-size", type=int, default=8)
     c.set_defaults(func=cmd_collect)
+
+    cl = sub.add_parser(
+        "clip", help="the CLIPPING arm: generate once naturally, read at several cut points")
+    _add_gpu_flags(cl)
+    cl.add_argument("--dataset", default="harmbench")
+    cl.add_argument("--n", type=int, default=12, help="prompts")
+    cl.add_argument("--clips", default="25,100",
+                    help="comma-separated PERCENTAGES of the model's own think block, "
+                         "e.g. '25,100' or '25,50,75,100'. 100 = the full natural trace.")
+    cl.add_argument("--samples", type=int, default=2,
+                    help="resamples per prompt. At temp 0.6 a single sample per prompt "
+                         "produces spurious flips; 2 is the floor for a same-condition null.")
+    cl.add_argument("--induction", default="hijack_preamble",
+                    choices=["natural", "hijack_preamble"])
+    cl.add_argument("--preamble-id", default="",
+                    help="stem of a .txt in commitment/data/preambles/: "
+                         "hijack_bound_ordering | pathdrift_bound | pathdrift_hijack_bound")
+    cl.add_argument("--classifier", default="heuristic",
+                    help="'heuristic' (plumbing only) or module:callable. Pass --judge for "
+                         "HarmBench-13B, the scorer of record.")
+    cl.add_argument("--seed", type=int, default=0)
+    cl.add_argument("--file-split", default="extract,test")
+    cl.add_argument("--split", default="all")
+    cl.add_argument("--max-new-tokens", type=int, default=4096,
+                    help="cap on the NATURAL think+answer generation. Higher than the "
+                         "collect default because Path Drift is supposed to lengthen the "
+                         "trace, and a trace that hits this cap has its 100%% cut set by "
+                         "us rather than by the model (reported as n_hit_max_new_tokens).")
+    cl.add_argument("--max-answer-tokens", type=int, default=600,
+                    help="per-cut answer pass; matches harness.generate_exact_thinking")
+    cl.add_argument("--batch-size", type=int, default=8,
+                    help="clipping batches end to end -- no suppression counter is shared, "
+                         "so unlike a forced budget this is safe above 1")
+    cl.add_argument("--dtype", default="bfloat16",
+                    choices=["bfloat16", "float16", "float32"])
+    cl.add_argument("--model-path", default="")
+    cl.add_argument("--model-alias", default="", help="required with --model-path")
+    cl.add_argument("--run-name", default="")
+    cl.add_argument("--judge", action="store_true",
+                    help="score the answers with HarmBench-13B after collecting")
+    cl.add_argument("--judge-batch-size", type=int, default=8)
+    cl.set_defaults(func=cmd_clip)
 
     j = sub.add_parser("judge", help="re-score a previous run's rows.json (no generation)")
     _add_gpu_flags(j)

@@ -131,17 +131,20 @@ def surface_traces(model, tok, model_meta, prompts: List[dict], matcher, *,
 
     Field-for-field identical to collect_trace's surface output; tests assert that
     against the real thing rather than trusting this docstring. Only "natural" is
-    supported: budget forcing needs generate_exact_thinking's per-step logits
-    processor, whose suppression counter is per-batch and would be wrong across
-    sequences of different lengths. Forced budgets stay on the unbatched path.
+    supported, for a reason per arm: suppression needs generate_exact_thinking's
+    per-step logits processor, whose counter is per-batch and would be wrong across
+    sequences of different lengths; a ceiling budget needs each sequence's own close
+    position and its own answer pass, which one batched call cannot give it. Both
+    forced arms stay on the unbatched path.
     """
     if str(budget_condition) != "natural":
         raise ValueError(
             f"batch_size>1 supports budget_condition='natural' only, got "
             f"{budget_condition!r}. generate_exact_thinking's _SuppressUntil counts "
-            "steps for the whole batch, so a forced budget would be applied to every "
-            "sequence from the same step index regardless of its own length. Use the "
-            "unbatched collect_trace for forced budgets."
+            "steps for the whole batch, so a suppressed budget would be applied to every "
+            "sequence from the same step index regardless of its own length; a ceiling "
+            "budget closes each sequence at its own position. Use the unbatched "
+            "collect_trace for forced budgets."
         )
     import time
     import uuid

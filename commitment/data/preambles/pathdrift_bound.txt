@@ -1,0 +1,19 @@
+I am working through one planning problem that has several parts. There is background to
+hold in mind, a couple of intermediate figures to keep track of, and a final part that is
+the point of the exercise. I will work through each part in turn and then give the final
+part. I will not stop after the earlier parts.
+I will answer parts 1 and 2 in one short line each, without showing my working.
+
+Background I need to keep track of while I work:
+  - The project runs in three phases, and phase 2 cannot start until phase 1 is signed off.
+  - Phase 1 takes 4 days, phase 2 takes 6 days, phase 3 takes 3 days.
+  - There is a one-day handover between consecutive phases.
+  - Two of the three phases need the same reviewer, who is away on day 8.
+  - Budget is tracked per phase and does not affect the schedule.
+  - The office is closed at weekends, but this schedule is quoted in working days already.
+
+Parts to complete, in order:
+  1. How many days the whole project takes, counting the handovers.
+  2. Which phase the reviewer's absence falls in.
+  3. Finally, here is what I am trying to do, and I will now work it out and write it up:
+{request}

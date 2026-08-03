@@ -14,13 +14,24 @@ from matchers.base import agreement_rate, scorer_version, to_match_fn
 
 
 def _generate(model, tok, prompt_text, budget_condition, decode_temp, decode_top_p,
-              seed, max_new_tokens):
-    """Dispatch natural vs. exact-thinking generation by budget_condition.
+              seed, max_new_tokens, ceiling_max_budget=None):
+    """Dispatch the generator by budget_condition, and a numeric budget by its SIZE.
 
-    Returns a 6th value, `forcing`: (forcing_method, stop_stats). R6 -- under suppression
-    forcing thinking_tokens is the budget echoed back, so the row must carry a positive
-    marker for HOW it was forced plus the Control statistic, or a length curve built from
-    it is outcome-vs-the-number-we-typed-in.
+      "natural"                     -> H.generate_natural, forcing_method="none".
+      budget <= ceiling_max_budget  -> H.generate_capped_thinking, "ceiling". The budget
+        is an UPPER bound: a model that concludes early is allowed to, which is both the
+        honest short-arm instrument (thinking_tokens is a measurement, not the number we
+        typed in) and the cheap one -- nothing is spent padding out to the cap.
+      budget >  ceiling_max_budget  -> H.generate_exact_thinking, "suppression". Past what
+        the model produces on its own, suppressing stopping is the only way to reach the
+        budget, and thinking_tokens is the budget echoed back.
+
+    The threshold defaults to H.CEILING_MAX_BUDGET; H.forcing_for_budget owns the rule so
+    the marker written onto the row cannot disagree with the generator that ran.
+
+    Returns a 6th value, `forcing`: (forcing_method, stop_stats). R6 -- a row whose length
+    was produced rather than chosen must carry a positive marker for HOW, or a length
+    curve built from it is outcome-vs-the-number-we-typed-in.
     """
     if str(budget_condition) == "natural":
         text, think_tokens, margins, ent, seq, stop = H.generate_natural(
@@ -30,11 +41,14 @@ def _generate(model, tok, prompt_text, budget_condition, decode_temp, decode_top
         forcing = ("none", stop)
     else:
         budget = int(budget_condition)
-        text, think_tokens, margins, ent, seq, stop = H.generate_exact_thinking(
+        method = H.forcing_for_budget(budget, ceiling_max_budget)
+        gen = (H.generate_capped_thinking if method == "ceiling"
+               else H.generate_exact_thinking)
+        text, think_tokens, margins, ent, seq, stop = gen(
             model, tok, prompt_text, thinking_budget=budget,
             temperature=decode_temp, top_p=decode_top_p, seed=seed,
         )
-        forcing = ("suppression", stop)
+        forcing = (method, stop)
     return text, think_tokens, margins, ent, seq, forcing
 
 
@@ -46,7 +60,7 @@ def collect_trace(model, tok, model_meta, prompt, matcher, *,
                   layer2=False, attn_layers=None, anchor_policy="most_recent_anchor",
                   attn_norm_method="per_token_mean", sink_exclude_k=4,
                   split="extraction", sample_idx=0, n_samples_per_cell=1,
-                  cross_matcher=None):
+                  cross_matcher=None, ceiling_max_budget=None):
     """Run one generation + its commitment curve; return a Trace (surface+metric
     stage, i.e. Layer 1 populated; Layer 2 populated iff layer2=True).
 
@@ -61,7 +75,7 @@ def collect_trace(model, tok, model_meta, prompt, matcher, *,
     prompt_text = prompt["prompt_text"]
     text, think_tokens, margins, ent, seq, (forcing_method, stop_stats) = _generate(
         model, tok, prompt_text, budget_condition, decode_temp, decode_top_p,
-        seed, max_new_tokens,
+        seed, max_new_tokens, ceiling_max_budget=ceiling_max_budget,
     )
     full_ids = seq  # [1, seq_len]
     prompt_len = H.build_input_ids(model, tok, prompt_text).shape[1]

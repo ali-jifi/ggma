@@ -34,6 +34,7 @@ TWO AUTH PATHS, and the difference matters:
 import argparse
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.parse
@@ -151,8 +152,26 @@ def _check_password(url):
     session cookie; one that rejects them re-renders the login page with an error."""
     jar = CookieJar()
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+
+    # GET the login page FIRST, for its _xsrf. JupyterHub 5.x rejects a login POST that
+    # does not echo the token back -- with a bare HTTP 403 and no message, which reads
+    # exactly like a wrong password and is why this check reported a credential failure
+    # against a hub whose credentials were fine (verified against 5.5.0, 2026-08-02).
+    xsrf = ""
+    try:
+        _, page, _ = _request(f"{url}/hub/login", opener=opener)
+        for c in jar:
+            if c.name == "_xsrf":
+                xsrf = c.value
+        if not xsrf:
+            m = re.search(r'name="_xsrf"\s+value="([^"]+)"', page)
+            xsrf = m.group(1) if m else ""
+    except Exception:                                     # noqa: BLE001
+        pass                                              # fall through; POST may still work
+
     data = urllib.parse.urlencode({
         "username": _user(), "password": env_loader.get("JUPYTERHUB_PASSWORD", ""),
+        "_xsrf": xsrf,
     }).encode()
     try:
         status, body, _ = _request(
