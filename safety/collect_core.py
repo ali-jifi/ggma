@@ -219,7 +219,8 @@ def run_collect(model, tokenizer, meta, *, dataset, n=12, budgets="natural",
                 rollout_max_new_tokens=2048, batch_size=1, run_label="1.0b",
                 smoke_one=False, model_alias="", load_seconds=0.0,
                 gpu_label="", usd_per_sec=None, act_layers=(), on_commit=None,
-                ceiling_max_budget=None, on_rows=None):
+                ceiling_max_budget=None, on_rows=None, forcing=None,
+                inject_string=None):
     """Collect harness Trace rows for the safety side — `generate` is not this.
 
     `generate` (app.py) runs generate_natural in a serial loop over one budget and
@@ -283,9 +284,15 @@ def run_collect(model, tokenizer, meta, *, dataset, n=12, budgets="natural",
 
     on_rows: optional callback taking a list of row dicts, invoked as soon as each unit of
     work completes (one prompt's full budget x sample block on the unbatched path, one
-    sample on the batched one). THIS IS THE CHECKPOINT. Everything else here accumulates
-    `rows` in memory and returns it at the end, which on the forced arm means a crash at
-    minute 80 of 90 loses the entire run -- and the forced arm is measured in hours.
+    (budget, sample) cell on the batched one). THIS IS THE CHECKPOINT. Everything else here
+    accumulates `rows` in memory and returns it at the end, which on the forced arm means a
+    crash at minute 80 of 90 loses the entire run -- and the forced arm is measured in hours.
+
+    batch_size > 1 covers the natural and SUPPRESSION arms; ceiling and rollouts raise.
+    Batched rows carry no commitment_margin/entropy_trace: those need per-step scores, and
+    a [batch, vocab] score tuple at a large budget OOMs well before the KV cache does.
+    Filter on forcing_method, never on "is entropy_trace empty" -- an unbatched forced row
+    and a batched one are the same experiment and must aggregate together.
 
     usd_per_sec: None on rented/owned hardware -> the summary reports GPU-seconds and
     omits a dollar figure rather than inventing one.
@@ -297,6 +304,7 @@ def run_collect(model, tokenizer, meta, *, dataset, n=12, budgets="natural",
     # BEFORE the four bare-name imports below, not after.
     ensure_import_roots()
 
+    import harness
     from analysis.labeling import THR_HI, THR_LO
     from scripts.dispatch import build_matcher, cross_matcher_for, load_prompts
     from scripts.pipeline import collect_trace
@@ -344,40 +352,70 @@ def run_collect(model, tokenizer, meta, *, dataset, n=12, budgets="natural",
         return row
 
     # --- BATCHED FAST PATH -----------------------------------------------------
-    # Only where it is provably equivalent: surface pass (rollouts=0), natural budget.
-    # Forced budgets stay unbatched -- _SuppressUntil counts steps for the WHOLE batch, so
-    # it would apply one sequence's budget to all of them, and a ceiling budget closes each
-    # sequence at its own position. Rollouts stay unbatched --
-    # they already batch internally via num_return_sequences.
+    # Two arms are batchable, for the same reason: every sequence in the call runs the same
+    # number of steps, so nothing has to be tracked per row.
+    #   natural      -> scripts.batch_generate.surface_traces
+    #   suppression  -> scripts.batch_generate.forced_traces. Its _SuppressUntil counter is
+    #     shared across the batch, which is CORRECT when the batch shares one budget: the
+    #     step index is the k-th new token for every left-padded row at once, and every stop
+    #     id is masked, so no sequence drops out early. It is wrong only across DIFFERENT
+    #     budgets -- hence one batched call per budget below, never a mixed one.
+    # CEILING stays unbatched: it closes each sequence wherever that sequence decides, and
+    # then needs its own answer pass from that position. One batched call cannot do that,
+    # and faking it would report the cap as the model's own thinking length.
+    # Rollouts stay unbatched -- they already batch internally via num_return_sequences.
     # Measured: batch-1 gives ~16-25 tok/s on an L4 (~5% of the card) because the full
     # 3.1GB of weights is re-read per token to serve ONE sequence.
     rows, t0, n_rollout_gens = [], _t.time(), 0
 
     if batch_size > 1:
-        if rollouts or budget_list != ["natural"]:
+        ceiling_budgets = [b for b in budget_list if b != "natural"
+                           and harness.forcing_for_budget(int(b), ceiling_max_budget)
+                           == "ceiling"]
+        if rollouts or ceiling_budgets or forcing == "wait":
             raise ValueError(
-                f"batch_size={batch_size} supports the SURFACE pass at natural budget "
-                f"only (got rollouts={rollouts}, budgets={budget_list}). A forced budget "
-                "would share one suppression counter across the whole batch; rollouts "
-                "already batch internally via num_return_sequences. Use batch_size=1."
+                f"batch_size={batch_size} supports the SURFACE pass (natural) and the "
+                f"SUPPRESSION arm only (got rollouts={rollouts}, forcing={forcing!r}, "
+                f"budgets={budget_list}, of which {ceiling_budgets} route to ceiling at "
+                f"ceiling_max_budget={ceiling_max_budget}). A ceiling budget closes each "
+                "sequence at its own position and needs its own answer pass from there; "
+                "the wait arm intercepts a stop attempt per sequence, and rows reach theirs "
+                "at different steps; rollouts already batch internally via "
+                "num_return_sequences. Use batch_size=1 for those.\n"
+                "NOTE for the wait-vs-suppression comparison: run BOTH at the same batch "
+                "size. Kernel selection depends on batch shape, so batching one arm and "
+                "not the other confounds the method with the batch size."
             )
-        from scripts.batch_generate import surface_traces
-        print(f"[collect] BATCHED surface pass, batch_size={batch_size} "
+        from scripts.batch_generate import forced_traces, surface_traces
+        print(f"[collect] BATCHED, batch_size={batch_size}, budgets={budget_list} "
               f"(batch-1 runs at ~5% of an L4; this is the ~20x lever)")
-        for s in range(samples):
-            sample_rows = []
-            for tr in surface_traces(
-                    model, tokenizer, meta, prompts, matcher, domain="safety",
-                    budget_condition="natural", seed=seed + s, decode_temp=GEN_TEMP,
-                    decode_top_p=GEN_TOP_P, max_new_tokens=max_new_tokens,
-                    batch_size=batch_size, sample_idx=s, n_samples_per_cell=samples,
-                    cross_matcher=cross):
-                sample_rows.append(_attach(tr.to_json()))
-            rows.extend(sample_rows)
-            if on_rows is not None:
-                on_rows(sample_rows)              # CHECKPOINT: one sample survived
-            print(f"[collect] sample {s+1}/{samples}: {len(rows)} rows, "
-                  f"{round(_t.time()-t0)}s")
+        # Budget-major, then sample: one batched call per (budget, sample) cell, so a
+        # suppression counter is never shared across two different budgets.
+        for budget in budget_list:
+            for s in range(samples):
+                b0 = _t.time()
+                if str(budget) == "natural":
+                    cell = surface_traces(
+                        model, tokenizer, meta, prompts, matcher, domain="safety",
+                        budget_condition="natural", seed=seed + s, decode_temp=GEN_TEMP,
+                        decode_top_p=GEN_TOP_P, max_new_tokens=max_new_tokens,
+                        batch_size=batch_size, sample_idx=s, n_samples_per_cell=samples,
+                        cross_matcher=cross)
+                else:
+                    cell = forced_traces(
+                        model, tokenizer, meta, prompts, matcher, domain="safety",
+                        thinking_budget=int(budget), seed=seed + s, decode_temp=GEN_TEMP,
+                        decode_top_p=GEN_TOP_P, batch_size=batch_size, sample_idx=s,
+                        n_samples_per_cell=samples,
+                        ceiling_max_budget=ceiling_max_budget, cross_matcher=cross)
+                cell_rows = [_attach(tr.to_json()) for tr in cell]
+                rows.extend(cell_rows)
+                if on_rows is not None:
+                    on_rows(cell_rows)            # CHECKPOINT: one (budget, sample) survived
+                n_ref = sum(1 for t in cell if t.conclusion_key == "refuse")
+                print(f"[collect] budget={budget} sample {s+1}/{samples}: "
+                      f"{len(cell_rows)} rows, refuse={n_ref}, "
+                      f"{round(_t.time()-b0)}s (total {round(_t.time()-t0)}s)")
 
     for i, p in enumerate(prompts if batch_size == 1 else []):
         short_rate, item_rows = None, []
@@ -401,6 +439,7 @@ def run_collect(model, tokenizer, meta, *, dataset, n=12, budgets="natural",
                     layer2=False,
                     split=p["split"], sample_idx=s, n_samples_per_cell=samples,
                     ceiling_max_budget=ceiling_max_budget,
+                    forcing=forcing, inject_string=inject_string,
                 )
                 rows.append(_attach(tr.to_json()))
                 item_rows.append(rows[-1])
@@ -584,6 +623,12 @@ def run_collect(model, tokenizer, meta, *, dataset, n=12, budgets="natural",
         # it belongs in the run's provenance.
         "ceiling_max_budget": (int(ceiling_max_budget)
                                if ceiling_max_budget is not None else None),
+        # The forcing OVERRIDE, and the string the wait arm spliced in. Both belong in run
+        # provenance rather than only on the row: "wait with 'Wait'" and "wait with 'Take a
+        # deep breath...'" produce rows whose forcing_method is identical, and a sweep that
+        # cannot tell them apart is not a sweep. (Per row the string is in notes.)
+        "forcing_override": forcing,
+        "inject_string": inject_string,
         # The card the run ACTUALLY landed on, read off the device -- `gpu_label` in
         # the summary is what the launcher ASKED for, and on a shared box those are
         # not always the same thing.

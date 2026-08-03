@@ -71,7 +71,7 @@ from transformers import (
     LogitsProcessor, StoppingCriteria, TemperatureLogitsWarper, TopPLogitsWarper,
 )
 
-HARNESS_VERSION = "0.4.2"
+HARNESS_VERSION = "0.4.3"
 # trace-v0.3.1 == the shared schema: math's trace-v0.3 plus ONE field, forcing_method
 # (R6 budget-forcing provenance). The interim trace-v0.4 briefly carried six additional
 # stop_* diagnostics; those were dropped as unused, so the schema narrows back onto the
@@ -96,8 +96,16 @@ VALID_INDUCTION = ("natural", "hijack_preamble")
 # How the reasoning length was produced. The POSITIVE marker every R6 rule keys on --
 # never infer forcing from budget_condition: Stage C thinking-clipping is non-natural yet
 # is a mechanism distinct from suppression. "ceiling" widened this tuple in harness 0.4.2;
-# no FIELD was added, so the schema string stays trace-v0.3.1 and row shape is unchanged.
-VALID_FORCING = ("none", "suppression", "clipping", "ceiling")
+# "wait" in 0.4.3. No FIELD was added by either, so the schema string stays trace-v0.3.1
+# and row shape is unchanged -- but this tuple is in the FROZEN file, so a new member is
+# an R4 change and needs team sign-off before data collected under it is shared.
+#
+# "wait" is s1/TTBC-2 budget forcing (scripts/wait_inject.py): the delimiter is suppressed
+# and a string is APPENDED at each stop attempt, until the budget. It is a different
+# mechanism from "suppression", which blocks stopping and appends nothing, and the two are
+# not interchangeable in an aggregate -- s1 Table 4 measures them apart at identical
+# budget. The injected string and its spans ride in Trace.notes until they earn a field.
+VALID_FORCING = ("none", "suppression", "clipping", "ceiling", "wait")
 VALID_ANCHOR_POLICY = ("first_anchor", "most_recent_anchor")
 VALID_ATTN_NORM = ("raw_mass", "per_token_mean")
 

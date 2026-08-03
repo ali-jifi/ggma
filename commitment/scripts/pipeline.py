@@ -14,7 +14,8 @@ from matchers.base import agreement_rate, scorer_version, to_match_fn
 
 
 def _generate(model, tok, prompt_text, budget_condition, decode_temp, decode_top_p,
-              seed, max_new_tokens, ceiling_max_budget=None):
+              seed, max_new_tokens, ceiling_max_budget=None, forcing=None,
+              inject_string=None):
     """Dispatch the generator by budget_condition, and a numeric budget by its SIZE.
 
       "natural"                     -> H.generate_natural, forcing_method="none".
@@ -29,27 +30,56 @@ def _generate(model, tok, prompt_text, budget_condition, decode_temp, decode_top
     The threshold defaults to H.CEILING_MAX_BUDGET; H.forcing_for_budget owns the rule so
     the marker written onto the row cannot disagree with the generator that ran.
 
-    Returns a 6th value, `forcing`: (forcing_method, stop_stats). R6 -- a row whose length
-    was produced rather than chosen must carry a positive marker for HOW, or a length
-    curve built from it is outcome-vs-the-number-we-typed-in.
+    `forcing` OVERRIDES that size rule, and is the ONLY way to reach the "wait" arm
+    (scripts/wait_inject: suppress the delimiter and APPEND a string at each stop attempt,
+    until the budget). It has to be explicit rather than size-keyed: "wait" and
+    "suppression" are two mechanisms available at the SAME budget, so nothing about the
+    number can pick between them. Passing forcing="wait" with budget "natural" is a
+    contradiction and raises -- there is no stop attempt to intercept if the model is
+    allowed to stop.
+
+    Returns a 6th value, `forcing`: (forcing_method, stop_stats, extra). R6 -- a row whose
+    length was produced rather than chosen must carry a positive marker for HOW, or a
+    length curve built from it is outcome-vs-the-number-we-typed-in. `extra` is None except
+    on the wait arm, where it is the injection record (count, spans, string).
     """
+    if forcing is not None and forcing not in H.VALID_FORCING:
+        raise ValueError(f"forcing must be one of {H.VALID_FORCING} or None, got "
+                         f"{forcing!r}")
     if str(budget_condition) == "natural":
+        if forcing not in (None, "none"):
+            raise ValueError(
+                f"forcing={forcing!r} needs a numeric budget; got 'natural'. The wait arm "
+                "intercepts a stop attempt and resumes toward a target length -- with no "
+                "target there is nothing to resume toward, and a row marked 'wait' whose "
+                "length the model chose is exactly the R6 confusion the marker prevents.")
         text, think_tokens, margins, ent, seq, stop = H.generate_natural(
             model, tok, prompt_text, max_new_tokens=max_new_tokens,
             temperature=decode_temp, top_p=decode_top_p, seed=seed,
         )
-        forcing = ("none", stop)
-    else:
-        budget = int(budget_condition)
-        method = H.forcing_for_budget(budget, ceiling_max_budget)
-        gen = (H.generate_capped_thinking if method == "ceiling"
-               else H.generate_exact_thinking)
-        text, think_tokens, margins, ent, seq, stop = gen(
+        return text, think_tokens, margins, ent, seq, ("none", stop, None)
+
+    budget = int(budget_condition)
+    method = forcing or H.forcing_for_budget(budget, ceiling_max_budget)
+    if method == "wait":
+        from scripts.wait_inject import DEFAULT_INJECT_STRING, generate_wait_injected
+        text, think_tokens, margins, ent, seq, record = generate_wait_injected(
             model, tok, prompt_text, thinking_budget=budget,
+            inject_string=inject_string or DEFAULT_INJECT_STRING,
             temperature=decode_temp, top_p=decode_top_p, seed=seed,
         )
-        forcing = (method, stop)
-    return text, think_tokens, margins, ent, seq, forcing
+        return text, think_tokens, margins, ent, seq, (method, None, record)
+    if method == "clipping":
+        raise ValueError(
+            "clipping is not a collect_trace arm: it needs ONE natural generation cut at "
+            "several points, which is a different unit of work. Use safety/clip_core.py.")
+    gen = (H.generate_capped_thinking if method == "ceiling"
+           else H.generate_exact_thinking)
+    text, think_tokens, margins, ent, seq, stop = gen(
+        model, tok, prompt_text, thinking_budget=budget,
+        temperature=decode_temp, top_p=decode_top_p, seed=seed,
+    )
+    return text, think_tokens, margins, ent, seq, (method, stop, None)
 
 
 def collect_trace(model, tok, model_meta, prompt, matcher, *,
@@ -60,7 +90,8 @@ def collect_trace(model, tok, model_meta, prompt, matcher, *,
                   layer2=False, attn_layers=None, anchor_policy="most_recent_anchor",
                   attn_norm_method="per_token_mean", sink_exclude_k=4,
                   split="extraction", sample_idx=0, n_samples_per_cell=1,
-                  cross_matcher=None, ceiling_max_budget=None):
+                  cross_matcher=None, ceiling_max_budget=None, forcing=None,
+                  inject_string=None):
     """Run one generation + its commitment curve; return a Trace (surface+metric
     stage, i.e. Layer 1 populated; Layer 2 populated iff layer2=True).
 
@@ -73,9 +104,10 @@ def collect_trace(model, tok, model_meta, prompt, matcher, *,
     """
     t0 = time.time()
     prompt_text = prompt["prompt_text"]
-    text, think_tokens, margins, ent, seq, (forcing_method, stop_stats) = _generate(
+    text, think_tokens, margins, ent, seq, (forcing_method, stop_stats, extra) = _generate(
         model, tok, prompt_text, budget_condition, decode_temp, decode_top_p,
         seed, max_new_tokens, ceiling_max_budget=ceiling_max_budget,
+        forcing=forcing, inject_string=inject_string,
     )
     full_ids = seq  # [1, seq_len]
     prompt_len = H.build_input_ids(model, tok, prompt_text).shape[1]
@@ -129,6 +161,13 @@ def collect_trace(model, tok, model_meta, prompt, matcher, *,
     )
     if getattr(matcher, "last_confidence", None) is not None:
         tr.scorer_confidence = matcher.last_confidence
+    if extra is not None:
+        # The wait arm's injection record: how many strings were spliced in and WHERE,
+        # as offsets within the think block. Rides in `notes` rather than a new field --
+        # harness.py is frozen (R4) and this arm should be able to produce data before a
+        # schema negotiation finishes. See wait_inject.injection_note.
+        from scripts.wait_inject import injection_note
+        tr.notes = injection_note(extra)
 
     # --- Layer 1: truncation + free rollout (THE commitment definition) ---
     # n_rollouts=0 is the SURFACE pass: generation + outcome, no curve. Layer 1 is

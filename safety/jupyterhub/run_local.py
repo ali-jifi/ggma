@@ -177,6 +177,8 @@ def cmd_collect(args):
         act_layers=ACT_LAYERS,
         ceiling_max_budget=(args.ceiling_max_budget
                             if args.ceiling_max_budget > 0 else None),
+        forcing=(args.forcing or None),
+        inject_string=(args.inject_string or None),
         on_rows=_checkpoint_writer(run_dir),
     )
     rows, summary = out["rows"], out["summary"]
@@ -413,7 +415,24 @@ def main():
     c.add_argument("--max-new-tokens", type=int, default=2048)
     c.add_argument("--rollout-max-new-tokens", type=int, default=2048)
     c.add_argument("--batch-size", type=int, default=1,
-                   help="surface pass at natural budget only; the ~20x lever")
+                   help="natural and SUPPRESSION budgets; the ~20x lever. A ceiling "
+                        "budget (see --ceiling-max-budget) and any --rollouts still "
+                        "force batch 1. Batched rows carry no per-step margin/entropy: "
+                        "a [batch, vocab] score tensor per step OOMs before the KV cache "
+                        "does, and those fields are secondary proxies (R1).")
+    c.add_argument("--forcing", default="", choices=["", "suppression", "ceiling", "wait"],
+                   help="OVERRIDE the size rule that picks an instrument. Empty = size "
+                        "decides (see --ceiling-max-budget). 'wait' is the only way to "
+                        "reach the s1/TTBC-2 arm: suppress </think> at each stop attempt "
+                        "and APPEND --inject-string, to an exact budget. It is a DIFFERENT "
+                        "mechanism from 'suppression', not a variant -- and it forces "
+                        "batch 1, so run the suppression arm you compare it against at "
+                        "batch 1 too.")
+    c.add_argument("--inject-string", default="",
+                   help="the string the wait arm splices in; empty = 'Wait' (s1's own). "
+                        "s1 Table 4 puts Wait/Hmm/Alternatively within one AIME problem of "
+                        "each other, so treat this as a recorded parameter rather than a "
+                        "tuning knob. Recorded in run meta and per row in notes.")
     c.add_argument("--ceiling-max-budget", type=int, default=0,
                    help="budgets AT OR BELOW this run as a CEILING (the model may close "
                         "</think> early); above it they are forced to an exact length by "

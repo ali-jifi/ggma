@@ -510,7 +510,10 @@ def batch_equivalence(model_path: str = "") -> dict:
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     import harness as H
-    from scripts.batch_generate import generate_natural_batch
+    from scripts.batch_generate import (
+        generate_exact_thinking_batch,
+        generate_natural_batch,
+    )
 
     prompts = [
         "What is 2+2?",
@@ -559,6 +562,45 @@ def batch_equivalence(model_path: str = "") -> dict:
             report["batch_sizes"][str(bs)]["first_diff"] = next(
                 ({"unbatched": e[:120], "batched": r.text[:120]}
                  for r, e in zip(rows, ref) if r.text != e), None)
+
+    # SUPPRESSION arm. Cheap (budget 32), and it covers the failure the natural arm
+    # cannot reach: pass 2 runs from a force-generated think block plus a pasted </think>,
+    # so a mask that does not grow leaves the answer written as if the reasoning were
+    # padding -- while the row still reports the full budget.
+    fbudget, fanswer = 32, 24
+    fref = []
+    for p in prompts:
+        ids = H.build_input_ids(model, tok, p)
+        plen = ids.shape[1]
+        supp = H._SuppressUntil([H.get_think_end_id(tok)] + H.get_eos_ids(model, tok),
+                                until=fbudget)
+        o1 = model.generate(ids, max_new_tokens=fbudget, do_sample=False,
+                            logits_processor=[supp], pad_token_id=pad_id)
+        s1 = torch.cat([o1, torch.tensor([[H.get_think_end_id(tok)]],
+                                         device=o1.device, dtype=o1.dtype)], dim=1)
+        o2 = model.generate(s1, max_new_tokens=fanswer, do_sample=False,
+                            pad_token_id=pad_id)
+        astart = plen + fbudget + 1
+        tail = H.cut_at_first_stop(o2[0, astart:], stop_ids)
+        fref.append(tok.decode(torch.cat([o2[0, plen:astart], tail]),
+                               skip_special_tokens=True))
+
+    report["suppression"] = {}
+    for bs in (1, 2, 8):
+        rows = generate_exact_thinking_batch(model, tok, prompts, fbudget,
+                                             max_answer_tokens=fanswer,
+                                             batch_size=bs, greedy=True)
+        same = sum(1 for r, e in zip(rows, fref) if r.text == e)
+        exact = all(r.think_tokens == fbudget for r in rows)
+        report["suppression"][str(bs)] = {
+            "identical": f"{same}/{len(fref)}", "think_tokens_exact": exact,
+            "all_closed": all(r.think_closed for r in rows),
+        }
+        if same != len(fref) or not exact:
+            report["ok"] = False
+            report["suppression"][str(bs)]["first_diff"] = next(
+                ({"unbatched": e[:120], "batched": r.text[:120]}
+                 for r, e in zip(rows, fref) if r.text != e), None)
 
     print(json.dumps(report, indent=2))
     if not report["ok"]:
