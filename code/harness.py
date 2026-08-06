@@ -66,7 +66,7 @@ import torch
 import torch.nn.functional as F
 from transformers import LogitsProcessor
 
-HARNESS_VERSION = "0.3.4"
+HARNESS_VERSION = "0.3.5"
 SCHEMA_VERSION = "trace-v0.3"
 
 # Declared in the schema but never populated yet: the shape estimator is not
@@ -343,7 +343,16 @@ class _SuppressUntil(LogitsProcessor):
 
 @torch.no_grad()
 def generate_natural(model, tokenizer, prompt, max_new_tokens=16384,
-                     temperature=0.6, top_p=0.95, seed=0):
+                     temperature=0.6, top_p=0.95, seed=0, output_scores=True):
+    """output_scores=True (default, unchanged behavior) captures the full
+    per-token probability distribution to compute margins/entropy. At long
+    budgets this is NOT free: at ~150K vocab size, 32768 tokens of scores in
+    float32 is roughly 20GB, on top of model weights and KV cache -- enough
+    to OOM larger models at the 32768-token ceiling even though the scores
+    are discarded immediately by callers that don't use them (e.g. the drift
+    run only needs the text and think_tokens). Pass output_scores=False to
+    skip this capture entirely; margins/entropies are then returned as
+    empty lists rather than computed."""
     torch.manual_seed(seed)
     ids = build_input_ids(model, tokenizer, prompt)
     prompt_len = ids.shape[1]
@@ -351,12 +360,15 @@ def generate_natural(model, tokenizer, prompt, max_new_tokens=16384,
         ids, max_new_tokens=max_new_tokens,
         do_sample=True, temperature=temperature, top_p=top_p,
         pad_token_id=tokenizer.eos_token_id,
-        return_dict_in_generate=True, output_scores=True,
+        return_dict_in_generate=True, output_scores=output_scores,
     )
     seq = out.sequences[0]
     new_tokens = seq[prompt_len:]
     text = tokenizer.decode(new_tokens, skip_special_tokens=True)
-    margins, entropies = _scores_to_margin_entropy(out.scores)
+    if output_scores:
+        margins, entropies = _scores_to_margin_entropy(out.scores)
+    else:
+        margins, entropies = [], []
     think_tokens = _count_thinking_tokens(tokenizer, new_tokens)
     return text, think_tokens, margins, entropies, out.sequences
 

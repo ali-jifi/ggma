@@ -54,6 +54,7 @@ _TEXT_WRAP = re.compile(r"\\text\{([^}]*)\}")
 _SQRT_BRACE = re.compile(r"\\sqrt\{(\w+)\}")
 _FRAC_BARE = re.compile(r"\\frac\s*(-?\d)\s*(-?\d)")  # \frac34 or \frac 3 4 (brace-less shorthand)
 _FRAC_BRACED = re.compile(r"\\frac\{(-?\d+)\}\{(-?\d+)\}")
+_VAR_IN_PREFIX = re.compile(r"^[a-zA-Z]\s*\\in\s*")  # 'x \in [-2,7]' -> '[-2,7]'
 
 
 def _normalize_math(s):
@@ -64,6 +65,7 @@ def _normalize_math(s):
     if s is None:
         return None
     s = s.strip().strip("$")
+    s = _VAR_IN_PREFIX.sub("", s)          # 'x \in [-2,7]' -> '[-2,7]' (leading var-membership prefix)
     s = s.replace("\\dfrac", "\\frac").replace("\\tfrac", "\\frac")
     s = re.sub(r"\\left|\\right", "", s)
     s = _TEXT_WRAP.sub(r"\1", s)          # \text{Evelyn} -> Evelyn (keep content)

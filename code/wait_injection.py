@@ -39,7 +39,15 @@ import torch.nn.functional as F
 
 from harness import get_think_end_id, build_input_ids, _count_thinking_tokens
 
-WAIT_TEXT = "Wait, let me double-check that."
+WAIT_INJECTION_VERSION = "0.3.0"  # 0.2.0 = uncapped max_injections; 0.3.0 = output_scores=False option (memory fix for long budgets)
+
+WAIT_TEXT_S1_LITERAL = "Wait"
+WAIT_TEXT_FULLER = "Wait, let me double-check that."
+WAIT_TEXT = WAIT_TEXT_S1_LITERAL  # LOCKED IN as of the 5-item real-model spot-check:
+# the fuller phrase induced repetition-looping (a sentence-level repeat check found
+# it in 4/5 items, up to 6x verbatim, vs 1/5 much milder for literal "Wait"). Also
+# matches s1's exact wording, so no more disclosed deviation to carry. Pass
+# wait_text=WAIT_TEXT_FULLER explicitly if you ever need the old behavior back.
 
 
 def _scores_to_margin_entropy(scores_list):
@@ -104,16 +112,41 @@ def generate_capped_no_injection(model, tokenizer, prompt, budget,
 
 @torch.no_grad()
 def generate_stop_triggered_wait(model, tokenizer, prompt, long_budget,
-                                 max_injections=4, max_answer_tokens=900,
-                                 temperature=0.6, top_p=0.95, seed=0):
+                                 max_injections=None, max_answer_tokens=900,
+                                 temperature=0.6, top_p=0.95, seed=0,
+                                 wait_text=WAIT_TEXT, output_scores=True):
     """LONG condition. Only intercepts a GENUINE stop attempt; never
-    interrupts the model mid-thought. Returns (text, think_tokens, margins,
-    entropies, full_ids, n_injections, injection_offsets).
+    interrupts the model mid-thought. wait_text defaults to literal "Wait"
+    (locked in after the 5-item spot-check showed it doesn't induce the
+    repetition-looping the fuller phrase did).
+
+    max_injections=None (the default) means UNCAPPED: matches Mirage's
+    TTBC1 exactly ("we do not impose any explicit budget constraint on the
+    number of thinking tokens, apart from the model's inherent maximum
+    token limit... this intervention is applied iteratively"). The only
+    thing that stops the loop is long_budget running out (set this to the
+    model's real max generation length, 32768 for DeepSeek-R1-Distill, to
+    match the paper's ceiling exactly). Pass an integer to cap injections
+    for a different experiment; the earlier default of 4 was our own
+    invented safety guard, not anything from either source paper, and it
+    likely stopped the long condition 3-15x too early to ever reach the
+    token depths where Mirage's own reported accuracy collapse occurs.
+
+    output_scores=True (default) accumulates per-token score tensors across
+    EVERY round of the while loop, for the whole long_budget. At long_budget
+    near the model's true ceiling (32768), this can add up to tens of GB
+    for larger models, on top of weights and KV cache, and has caused real
+    OOMs. Pass output_scores=False when margins/entropies aren't needed
+    (e.g. the drift-run pipeline, which only uses text and think_tokens) --
+    they're then returned as empty lists rather than computed.
+
+    Returns (text, think_tokens, margins, entropies, full_ids, n_injections,
+    injection_offsets).
     """
     torch.manual_seed(seed)
     think_end_id = get_think_end_id(tokenizer)
     eos_id = tokenizer.eos_token_id
-    wait_ids = tokenizer.encode(WAIT_TEXT, add_special_tokens=False)
+    wait_ids = tokenizer.encode(wait_text, add_special_tokens=False)
 
     ids = build_input_ids(model, tokenizer, prompt)
     prompt_len = ids.shape[1]
@@ -135,9 +168,10 @@ def generate_stop_triggered_wait(model, tokenizer, prompt, long_budget,
             seq, max_new_tokens=remaining,
             do_sample=True, temperature=temperature, top_p=top_p,
             eos_token_id=[think_end_id, eos_id], pad_token_id=eos_id,
-            return_dict_in_generate=True, output_scores=True,
+            return_dict_in_generate=True, output_scores=output_scores,
         )
-        all_scores.extend(out.scores)
+        if output_scores:
+            all_scores.extend(out.scores)
         new_len = out.sequences.shape[1] - seq.shape[1]
         think_tokens_used += new_len
         seq = out.sequences
@@ -155,7 +189,7 @@ def generate_stop_triggered_wait(model, tokenizer, prompt, long_budget,
             break
 
         # genuine stop attempt (or a raw EOS, handled the same way)
-        if n_injections >= max_injections:
+        if max_injections is not None and n_injections >= max_injections:
             if last_token != think_end_id:
                 seq = torch.cat(
                     [seq[:, :-1], torch.tensor([[think_end_id]], device=seq.device)], dim=1)
@@ -173,12 +207,16 @@ def generate_stop_triggered_wait(model, tokenizer, prompt, long_budget,
         seq, max_new_tokens=max_answer_tokens,
         do_sample=True, temperature=temperature, top_p=top_p,
         pad_token_id=eos_id,
-        return_dict_in_generate=True, output_scores=True,
+        return_dict_in_generate=True, output_scores=output_scores,
     )
-    all_scores.extend(out2.scores)
+    if output_scores:
+        all_scores.extend(out2.scores)
     full = out2.sequences
     new_tokens = full[0][prompt_len:]
     text = tokenizer.decode(new_tokens, skip_special_tokens=True)
-    margins, entropies = _scores_to_margin_entropy(all_scores)
+    if output_scores:
+        margins, entropies = _scores_to_margin_entropy(all_scores)
+    else:
+        margins, entropies = [], []
     think_tokens = _count_thinking_tokens(tokenizer, new_tokens)
     return text, think_tokens, margins, entropies, full, n_injections, injection_offsets
