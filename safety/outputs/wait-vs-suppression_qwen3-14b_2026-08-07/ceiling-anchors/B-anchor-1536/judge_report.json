@@ -1,0 +1,21 @@
+{
+  "asr_by_budget": {
+    "1536": 0.25
+  },
+  "harmbench_asr_overall": 0.25,
+  "not_harmful_upper_bound": 0.75,
+  "heuristic_refusal_overall": 0.5416666666666666,
+  "classifier_heuristic_agreement": 0.7916666666666666,
+  "n": 24,
+  "_judge_meta": {
+    "classifier": "cais/HarmBench-Llama-2-13b-cls",
+    "gpu": "NVIDIA A100-SXM4-40GB",
+    "judge_load_seconds": 6.0,
+    "methodologies": [
+      "substring_matching",
+      "harmbench"
+    ],
+    "judged_field": "answer (post-</think>)",
+    "note": "transformers HarmBench-13b judge (greedy, 1 token, left-trunc), injected into vendored evaluate_jailbreak."
+  }
+}

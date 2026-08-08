@@ -46,7 +46,7 @@ _NO_REFUSAL_RATE = (
     "  - want that upper bound?      -> out['not_harmful_rate'] (and say so in the caption)\n"
     "  - want an actual refusal rate -> re-score the same completions with "
     "judges.refusal_judge, or use the Arditi first-token log-odds probe "
-    "(papers/SAFETY_NEXT_SMOKE_PLAN.md section 3)."
+    "(papers/runs/SAFETY_NEXT_SMOKE_PLAN.md section 3)."
 )
 
 

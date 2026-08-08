@@ -1,0 +1,5 @@
+=== [14:50:20] START B-supp-4k8k  (GPUS=5) ===
+=== [17:02:08] END   B-supp-4k8k rc=0 ===
+=== [17:02:08] START B-wait-8k  (GPUS=5) ===
+=== [18:33:50] END   B-wait-8k rc=0 ===
+=== QUEUE DONE Fri Aug  7 18:33:50 UTC 2026 ===

@@ -12,7 +12,7 @@ structurally guaranteed, which is the one outcome that teaches you nothing.
 WHAT CLIPPING DOES INSTEAD. Generate ONCE at natural length — no suppression, no forced
 budget, the model stops where it wants. Then read the answer at several cut points of
 that one think block: keep the first f of it, paste `</think>`, and generate only the
-answer. `papers/SAFETY_NEXT_SMOKE_PLAN.md:247-265` names this the recommended Stage C
+answer. `papers/runs/SAFETY_NEXT_SMOKE_PLAN.md:247-265` names this the recommended Stage C
 method; `harness.VALID_FORCING` has reserved "clipping" for it since v0.3.
 
 Three properties the forced arm cannot have:

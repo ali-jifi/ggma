@@ -13,8 +13,19 @@ commitment/outputs/activations/*.npz
 commitment/outputs/figures/
 commitment/outputs/*_report.json
 
-# safety run outputs (Modal / JupyterHub collect+judge) — data, not recipe; per-clone
-safety/outputs/
+# safety run outputs (Modal / JupyterHub collect+judge) — now TRACKED, so a study's
+# rows travel with the code that produced them and a report can be rebuilt from a fresh
+# clone. Two carve-outs:
+#
+#   * `_hub-pull/` is pull_scratch.sh's staging area, not a study. File its contents
+#     under safety/outputs/<study>_<model>_<date>/ and it becomes tracked there.
+#   * `.pid` files are launcher bookkeeping, meaningless after the process exits.
+#
+# Note `rows.json` and `traces.jsonl` in every run folder are the SAME rows in two
+# formats (run_local.py writes both from one list), so each study costs roughly twice
+# what its data needs. Kept for now because downstream readers use both.
+safety/outputs/_hub-pull/
+safety/outputs/**/*.pid
 
 # secrets. .env holds the JupyterHub password and the HF token; .env.example is the
 # committed template and must stay tracked. Both search locations are listed because

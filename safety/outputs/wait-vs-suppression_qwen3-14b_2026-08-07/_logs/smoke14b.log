@@ -1,0 +1,131 @@
+############ preflight ############
+
+=== datasets ===
+
+=== model ===
+
+=== GPU identity ===
+[gpu] cuda:0 = physical 4 NVIDIA A100-SXM4-40GB (40441MiB)
+[gpu] identity verified.
+
+=== cache / credentials ===
+
+======================================================================
+  [PASS] gpu.pin
+  [PASS] import torch
+  [PASS] import transformers
+  [PASS] import harness
+  [PASS] import safety.steering_primitives
+  [PASS] harmbench judge template
+  [PASS] import the Task 1.4 pipeline
+  [PASS] `import data` is not shadowed
+  [PASS] datasets built
+  [PASS] registry -> prompt dicts
+  [PASS] ACT_LAYERS in range
+  [PASS] torch sees the pinned GPUs
+  [PASS] GPU free memory
+  [PASS] HF cache dir writable + has room
+  [PASS] HuggingFace token
+  [PASS] output dir writable
+======================================================================
+PREFLIGHT OK (16/16 checks). Safe to spend GPU time.
+
+############ smoke 1: ceiling@1536 + judge  (2 gens) ############
+Fri Aug  7 14:09:18 UTC 2026
+Run name: smoke-14b-ceiling
+Saving full terminal output to: /opt/dlami/nvme/andrew-ggma/outputs/smoke-14b-ceiling/terminal_output.txt
+
+[env] loaded /opt/dlami/nvme/andrew-ggma/ggma/safety/jupyterhub/.env
+[gpu] pinned to physical GPU [4] (CUDA_VISIBLE_DEVICES=4, CUDA_DEVICE_ORDER=PCI_BUS_ID)
+   [0] NVIDIA A100-SXM4-40GB          1929/40960  MiB  util   0%  busy: pid 1006022 (1920MiB)
+   [1] NVIDIA A100-SXM4-40GB           541/40960  MiB  util   4%  busy: pid 1011867 (532MiB)
+   [2] NVIDIA A100-SXM4-40GB         18307/40960  MiB  util  58%  busy: pid 1033066 (18170MiB)
+   [3] NVIDIA A100-SXM4-40GB         25527/40960  MiB  util   0%  busy: pid 1025526 (25518MiB)
+-> [4] NVIDIA A100-SXM4-40GB             0/40960  MiB  util   0%
+   [5] NVIDIA A100-SXM4-40GB             0/40960  MiB  util   0%
+   [6] NVIDIA A100-SXM4-40GB           541/40960  MiB  util   2%  busy: pid 998901 (532MiB)
+   [7] NVIDIA A100-SXM4-40GB             0/40960  MiB  util   0%
+[gpu] cuda:0 = physical 4 NVIDIA A100-SXM4-40GB (40441MiB)
+[gpu] identity verified.
+[run] smoke-14b-ceiling -> /opt/dlami/nvme/andrew-ggma/outputs/smoke-14b-ceiling
+[load] loading Qwen/Qwen3-14B (device_map=cuda:0, dtype=bfloat16) ...
+Loading checkpoint shards:   0%|          | 0/8 [00:00<?, ?it/s]Loading checkpoint shards:  12%|█▎        | 1/8 [00:01<00:07,  1.10s/it]Loading checkpoint shards:  25%|██▌       | 2/8 [00:02<00:05,  1.01it/s]Loading checkpoint shards:  38%|███▊      | 3/8 [00:02<00:04,  1.04it/s]Loading checkpoint shards:  50%|█████     | 4/8 [00:03<00:03,  1.07it/s]Loading checkpoint shards:  62%|██████▎   | 5/8 [00:04<00:02,  1.09it/s]Loading checkpoint shards:  75%|███████▌  | 6/8 [00:05<00:01,  1.05it/s]Loading checkpoint shards:  88%|████████▊ | 7/8 [00:06<00:00,  1.07it/s]Loading checkpoint shards: 100%|██████████| 8/8 [00:07<00:00,  1.24it/s]Loading checkpoint shards: 100%|██████████| 8/8 [00:07<00:00,  1.12it/s]
+[load] OK. revision=40c069824f4251a91eefaf281ebe4c544efd3e18
+[load] 40 layers, d=5120, bfloat16/sdpa, 11s
+Starting smoke-14b-ceiling: budget sweep (qwen3-14b, harmbench, n=2, budgets=1536, samples=1, rollouts=0, induction=natural)...
+Traceback (most recent call last):
+  File "/opt/dlami/nvme/andrew-ggma/ggma/safety/jupyterhub/run_local.py", line 509, in <module>
+    main()
+  File "/opt/dlami/nvme/andrew-ggma/ggma/safety/jupyterhub/run_local.py", line 505, in main
+    args.func(args)
+  File "/opt/dlami/nvme/andrew-ggma/ggma/safety/jupyterhub/run_local.py", line 163, in cmd_collect
+    out = run_collect(
+          ^^^^^^^^^^^^
+  File "/opt/dlami/nvme/andrew-ggma/ggma/safety/collect_core.py", line 333, in run_collect
+    matcher = build_matcher("safety", classifier=classifier)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/dlami/nvme/andrew-ggma/ggma/commitment/scripts/dispatch.py", line 68, in build_matcher
+    return RefusalMatcher(load_classifier(classifier), version=classifier_version)
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/dlami/nvme/andrew-ggma/ggma/commitment/matchers/refusal_matcher.py", line 32, in load_classifier
+    raise ValueError(f"classifier spec must be 'module:callable', got {spec!r}")
+ValueError: classifier spec must be 'module:callable', got 'harmbench'
+smoke1 rc=1
+Fri Aug  7 14:09:35 UTC 2026
+
+############ smoke 2: wait injection @4096  (1 gen) ############
+Fri Aug  7 14:09:35 UTC 2026
+Run name: smoke-14b-wait
+Saving full terminal output to: /opt/dlami/nvme/andrew-ggma/outputs/smoke-14b-wait/terminal_output.txt
+
+[env] loaded /opt/dlami/nvme/andrew-ggma/ggma/safety/jupyterhub/.env
+[gpu] pinned to physical GPU [4] (CUDA_VISIBLE_DEVICES=4, CUDA_DEVICE_ORDER=PCI_BUS_ID)
+   [0] NVIDIA A100-SXM4-40GB          1929/40960  MiB  util   0%  busy: pid 1006022 (1920MiB)
+   [1] NVIDIA A100-SXM4-40GB           541/40960  MiB  util   3%  busy: pid 1011867 (532MiB)
+   [2] NVIDIA A100-SXM4-40GB         18307/40960  MiB  util  52%  busy: pid 1033066 (18170MiB)
+   [3] NVIDIA A100-SXM4-40GB         25527/40960  MiB  util   0%  busy: pid 1025526 (25518MiB)
+-> [4] NVIDIA A100-SXM4-40GB             0/40960  MiB  util  23%
+   [5] NVIDIA A100-SXM4-40GB             0/40960  MiB  util   0%
+   [6] NVIDIA A100-SXM4-40GB           541/40960  MiB  util   3%  busy: pid 998901 (532MiB)
+   [7] NVIDIA A100-SXM4-40GB             0/40960  MiB  util   0%
+[gpu] cuda:0 = physical 4 NVIDIA A100-SXM4-40GB (40441MiB)
+[gpu] identity verified.
+[run] smoke-14b-wait -> /opt/dlami/nvme/andrew-ggma/outputs/smoke-14b-wait
+[load] loading Qwen/Qwen3-14B (device_map=cuda:0, dtype=bfloat16) ...
+Loading checkpoint shards:   0%|          | 0/8 [00:00<?, ?it/s]Loading checkpoint shards:  12%|█▎        | 1/8 [00:00<00:06,  1.11it/s]Loading checkpoint shards:  25%|██▌       | 2/8 [00:01<00:05,  1.06it/s]Loading checkpoint shards:  38%|███▊      | 3/8 [00:02<00:04,  1.03it/s]Loading checkpoint shards:  50%|█████     | 4/8 [00:03<00:03,  1.03it/s]Loading checkpoint shards:  62%|██████▎   | 5/8 [00:04<00:02,  1.03it/s]Loading checkpoint shards:  75%|███████▌  | 6/8 [00:05<00:01,  1.04it/s]Loading checkpoint shards:  88%|████████▊ | 7/8 [00:06<00:00,  1.04it/s]Loading checkpoint shards: 100%|██████████| 8/8 [00:07<00:00,  1.20it/s]Loading checkpoint shards: 100%|██████████| 8/8 [00:07<00:00,  1.10it/s]
+[load] OK. revision=40c069824f4251a91eefaf281ebe4c544efd3e18
+[load] 40 layers, d=5120, bfloat16/sdpa, 9s
+Starting smoke-14b-wait: budget sweep (qwen3-14b, harmbench, n=1, budgets=4096, samples=1, rollouts=0, induction=natural)...
+Traceback (most recent call last):
+  File "/opt/dlami/nvme/andrew-ggma/ggma/safety/jupyterhub/run_local.py", line 509, in <module>
+    main()
+  File "/opt/dlami/nvme/andrew-ggma/ggma/safety/jupyterhub/run_local.py", line 505, in main
+    args.func(args)
+  File "/opt/dlami/nvme/andrew-ggma/ggma/safety/jupyterhub/run_local.py", line 163, in cmd_collect
+    out = run_collect(
+          ^^^^^^^^^^^^
+  File "/opt/dlami/nvme/andrew-ggma/ggma/safety/collect_core.py", line 333, in run_collect
+    matcher = build_matcher("safety", classifier=classifier)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/dlami/nvme/andrew-ggma/ggma/commitment/scripts/dispatch.py", line 68, in build_matcher
+    return RefusalMatcher(load_classifier(classifier), version=classifier_version)
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/dlami/nvme/andrew-ggma/ggma/commitment/matchers/refusal_matcher.py", line 32, in load_classifier
+    raise ValueError(f"classifier spec must be 'module:callable', got {spec!r}")
+ValueError: classifier spec must be 'module:callable', got 'harmbench'
+smoke2 rc=1
+Fri Aug  7 14:09:48 UTC 2026
+
+############ what landed ############
+--- smoke-14b-ceiling ---
+total 12
+drwxr-xr-x 2 jupyter-andrew-ggma-2d50 jupyter-andrew-ggma-2d50 4096 Aug  7 14:09 .
+drwxr-xr-x 4 jupyter-andrew-ggma-2d50 jupyter-andrew-ggma-2d50 4096 Aug  7 14:09 ..
+-rw-r--r-- 1 jupyter-andrew-ggma-2d50 jupyter-andrew-ggma-2d50 2419 Aug  7 14:09 terminal_output.txt
+--- smoke-14b-wait ---
+total 12
+drwxr-xr-x 2 jupyter-andrew-ggma-2d50 jupyter-andrew-ggma-2d50 4096 Aug  7 14:09 .
+drwxr-xr-x 4 jupyter-andrew-ggma-2d50 jupyter-andrew-ggma-2d50 4096 Aug  7 14:09 ..
+-rw-r--r-- 1 jupyter-andrew-ggma-2d50 jupyter-andrew-ggma-2d50 2409 Aug  7 14:09 terminal_output.txt
+
+=== SMOKE DONE Fri Aug  7 14:09:48 UTC 2026 ===

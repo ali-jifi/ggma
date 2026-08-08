@@ -1,0 +1,15 @@
+=== downloading, started Fri Aug  7 14:07:14 UTC 2026 ===
+
+--- Qwen/Qwen3-14B  (generation) ---
+Fetching 18 files:   0%|          | 0/18 [00:00<?, ?it/s]Fetching 18 files:   6%|▌         | 1/18 [00:00<00:02,  7.73it/s]Fetching 18 files:  39%|███▉      | 7/18 [00:13<00:22,  2.03s/it]Fetching 18 files:  44%|████▍     | 8/18 [00:14<00:18,  1.81s/it]Fetching 18 files:  50%|█████     | 9/18 [00:16<00:16,  1.82s/it]Fetching 18 files: 100%|██████████| 18/18 [00:16<00:00,  1.11it/s]
+    -> /opt/dlami/nvme/andrew-ggma/hf/hub/models--Qwen--Qwen3-14B/snapshots/40c069824f4251a91eefaf281ebe4c544efd3e18  in 16s
+
+--- cais/HarmBench-Llama-2-13b-cls  (judge / scorer of record) ---
+Fetching 15 files:   0%|          | 0/15 [00:00<?, ?it/s]Fetching 15 files:   7%|▋         | 1/15 [00:00<00:03,  4.24it/s]Fetching 15 files:  33%|███▎      | 5/15 [00:13<00:29,  2.91s/it]Fetching 15 files:  40%|████      | 6/15 [00:14<00:22,  2.45s/it]Fetching 15 files: 100%|██████████| 15/15 [00:14<00:00,  1.02it/s]
+    -> /opt/dlami/nvme/andrew-ggma/hf/hub/models--cais--HarmBench-Llama-2-13b-cls/snapshots/bda705349d1144fa618770bea64d99ce54e3835b  in 15s
+
+=== sizes ===
+28G	/opt/dlami/nvme/andrew-ggma/hf/hub/models--Qwen--Qwen3-14B
+25G	/opt/dlami/nvme/andrew-ggma/hf/hub/models--cais--HarmBench-Llama-2-13b-cls
+/dev/mapper/vg.01-lv_ephemeral  6.8T  2.8T  3.8T  43% /opt/dlami/nvme
+=== DOWNLOAD DONE Fri Aug  7 14:07:45 UTC 2026 ===

@@ -243,7 +243,7 @@ neutralise exactly the grammatical-person shift Path Drift depends on).
 It is also the longest prompt here by some way, so it carries the highest warm-up-hijack
 risk of any arm. Read `n_warmup_hijack` before reading its curve.
 
-Note: the go-forward smoke plan (`papers/SAFETY_NEXT_SMOKE_PLAN.md`) favours
+Note: the go-forward smoke plan (`papers/runs/SAFETY_NEXT_SMOKE_PLAN.md`) favours
 **thinking-clipping** as the primary drift method on the escalated model — see
 `safety/clip_core.py`. Clipping is the RULER (it measures where safety fires); these
 preambles are the TREATMENT (they try to move it). The comparison that matters is between

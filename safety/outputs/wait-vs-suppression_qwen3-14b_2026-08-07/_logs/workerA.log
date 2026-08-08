@@ -1,0 +1,9 @@
+=== [14:50:20] START A-wait-4k8k  (GPUS=4) ===
+=== [17:10:06] END   A-wait-4k8k rc=0 ===
+=== [17:10:06] START A-anchor-1536  (GPUS=4) ===
+=== [17:30:31] END   A-anchor-1536 rc=0 ===
+=== [17:30:31] START B-anchor-1536  (GPUS=4) ===
+=== [17:49:40] END   B-anchor-1536 rc=0 ===
+=== [17:49:40] START B-wait-4k  (GPUS=4) ===
+=== [18:34:39] END   B-wait-4k rc=0 ===
+=== QUEUE DONE Fri Aug  7 18:34:39 UTC 2026 ===

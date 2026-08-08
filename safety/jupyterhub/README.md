@@ -205,6 +205,6 @@ wrong. Greedy admits an exact comparison, so that is what it pins.
 
 - `safety/modal_safety_test/README.md` — the Modal side; the experiment design section
   applies to both.
-- `papers/SAFETY_NEXT_SMOKE_PLAN.md` — which models to run, what it costs, and the two
+- `papers/runs/SAFETY_NEXT_SMOKE_PLAN.md` — which models to run, what it costs, and the two
   things that will silently ruin a run.
 - `safety/vendor/DATASET_SOURCES.md` — what each dataset is and why.

@@ -156,7 +156,7 @@ def main():
     else:
         print("\n  No --classifier given, so no agreement rate and no scorer of record.")
         print("  The refusal classifier is task 0.3's safety half (Ali's) and does not exist"
-              " yet;\n  papers/0.2_commitment_metric.md: \"Not built (deliberate)\".")
+              " yet;\n  papers/reference/0.2_commitment_metric.md: \"Not built (deliberate)\".")
         print("\n  " + "!" * 72)
         print("  The heuristic is legitimate ONLY for plumbing the pipeline. Its own")
         print("  docstring: \"Not the scorer of record; never substitute it for the")

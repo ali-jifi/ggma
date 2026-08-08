@@ -1,0 +1,9 @@
+=== [18:34:39] START A-wait-16k  (GPUS=4,5) ===
+=== [22:15:56] END   A-wait-16k rc=0 ===
+=== [22:15:56] START B-supp-16k  (GPUS=4,5) ===
+=== [02:17:39] END   B-supp-16k rc=0 ===
+=== [02:17:39] START B-wait-16k  (GPUS=4,5) ===
+=== [07:00:00] END   B-wait-16k rc=0 ===
+/home/jupyter-andrew-ggma-2d50/runplan.sh: line 90: able: command not found
+/home/jupyter-andrew-ggma-2d50/runplan.sh: line 97: syntax error near unexpected token `)'
+/home/jupyter-andrew-ggma-2d50/runplan.sh: line 97: `  A-supp-1536)   go A-supp-1536   "${NAT[@]}" "${ONE[@]}"   --budgets 1536 --samples 1 --forcing suppression ;;'
