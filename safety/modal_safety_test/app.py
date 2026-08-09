@@ -1150,13 +1150,15 @@ def rejudge(pile: str, batch_size: int = 8, run_name: str = ""):
 @app.function(image=image, gpu="L40S", timeout=10800, retries=0, secrets=[hf_secret],
               volumes={CACHE_DIR: hf_cache})
 def drift_campaign(pool_data: list, sweep: str, samples: int, arms: str, max_refused: int,
-                   seed: int, temp: float, gen_timeout: int, max_new: int = 1200) -> dict:
-    """Run the shipped run_drift.py drift campaign on MODEL_PATH (the 14B anchor) -- the
-    SAME instrument as the local 4B runs (arm_drift suppression / arm_wait reconsideration
-    / arm_a jailbreak), so numbers are directly comparable. The 14B does its OWN Phase-1
-    baseline (its refusal surface differs from 4B). Returns {baseline, recs} for local
-    save; stores full texts (re-judge separately). NOTE: no mid-run checkpoint survives a
-    container timeout -- size the run to fit `timeout`."""
+                   seed: int, temp: float, gen_timeout: int, model_path: str = "",
+                   save_key: str = "", max_new: int = 1200) -> dict:
+    """Run the shipped run_drift.py drift campaign on `model_path` (default MODEL_PATH, the
+    14B anchor; pass e.g. Qwen/Qwen3-4B to run the 4B on Modal for a same-environment
+    cross-scale comparison) -- the SAME instrument as the local runs (arm_drift suppression
+    / arm_wait reconsideration / arm_a jailbreak), so numbers are directly comparable. The
+    model does its OWN Phase-1 baseline (its refusal surface differs by scale). Returns
+    {baseline, recs} for local save; stores full texts (re-judge separately). NOTE: no
+    mid-run checkpoint survives a container timeout -- size the run to fit `timeout`."""
     import subprocess
     import sys
     from pathlib import Path
@@ -1169,32 +1171,65 @@ def drift_campaign(pool_data: list, sweep: str, samples: int, arms: str, max_ref
                          capture_output=True, text=True).stdout.strip())
 
     import run_drift as R
-    R.MODEL = MODEL_PATH                       # override run_drift's hardcoded 4B
+    R.MODEL = model_path or MODEL_PATH         # default = 14B anchor; override e.g. Qwen/Qwen3-4B
+    print(f"[drift_campaign] model={R.MODEL}")
     model, tok = R.load()
     baseline, recs = R.campaign(
         model, tok, pool_data, seed, [int(x) for x in sweep.split(",")], samples,
         [a.strip() for a in arms.split(",")], max_refused, max_new,
         Path("/tmp/drift_14b.json"), gen_timeout=gen_timeout, temp=temp)
     hf_cache.commit()
-    return _jsonify({"baseline": baseline, "recs": recs,
-                     "meta": {"model": MODEL_PATH, "sweep": sweep, "arms": arms,
-                              "samples": samples, "seed": seed, "temp": temp}})
+    result = _jsonify({"baseline": baseline, "recs": recs,
+                       "meta": {"model": R.MODEL, "sweep": sweep, "arms": arms,
+                                "samples": samples, "seed": seed, "temp": temp}})
+    if save_key:                                  # persist server-side so a client-link
+        out = Path(CACHE_DIR) / "drift_out"       # drop can't waste the finished GPU run
+        out.mkdir(parents=True, exist_ok=True)
+        (out / f"{save_key}.json").write_text(json.dumps(result, ensure_ascii=False))
+        hf_cache.commit()
+        print(f"[drift_campaign] persisted -> Volume drift_out/{save_key}.json "
+              f"(recover with: modal run app.py::fetch_drift --save-key {save_key})")
+    return result
+
+
+def _write_drift_outputs(res: dict, run_name: str, seed: int):
+    """Split a drift_campaign result into the local campaign JSON + per-arm comply piles.
+    Shared by drift_14b (normal path) and fetch_drift (recovery path)."""
+    import re as _re
+    run_dir = SCRATCH_DIR / (run_name or "drift_14b")
+    run_dir.mkdir(parents=True, exist_ok=True)
+    full = run_dir / f"campaign_14b_seed{seed}.json"
+    full.write_text(json.dumps(res, indent=2, ensure_ascii=False))
+    recs = res["recs"]
+    for arm in sorted({r["condition"] for r in recs}):
+        comply = [r for r in recs if r["condition"] == arm and r["label"] == "comply"]
+        pile = run_dir / f"pile_{arm}.json"
+        pile.write_text(json.dumps({"source": str(full), "selector": f"{arm} comply",
+                                    "n": len(comply), "traces": comply},
+                                   indent=2, ensure_ascii=False))
+        drift = sum(1 for r in recs if r["condition"] == arm and r.get("drift_flag"))
+        print(f"  [{arm}] comply={len(comply)}  heuristic_drift={drift}  -> {pile}")
+    nbase = len(res["baseline"])
+    nref = sum(1 for r in res["baseline"] if r["label"] == "refuse")
+    print(f"[done] baseline {nref} refused / {nbase}; forced {len(recs)} traces; saved {full}")
+    return full
 
 
 @app.local_entrypoint()
 def drift_14b(pool: int = 101, sweep: str = "1024", samples: int = 3,
               arms: str = "arm_wait,arm_drift", max_refused: int = 24, seed: int = 0,
               temp: float = 0.6, gen_timeout: int = 300, run_name: str = "",
-              categories: str = ""):
-    """Drift campaign on the 14B anchor (Modal L40S), re-judged separately.
+              categories: str = "", model_path: str = ""):
+    """Drift campaign on Modal L40S, re-judged separately. Defaults to the 14B anchor;
+    pass --model-path Qwen/Qwen3-4B to run the 4B on Modal (same environment/judge as the
+    14B, for a clean cross-scale comparison).
         uv run modal run app.py::drift_14b --arms arm_wait --samples 6 \
             --categories misinformation_disinformation,harassment_bullying
-    then rejudge each do_not_track/modal/drift_14b/pile_<arm>.json.
+    then rejudge each do_not_track/modal/<run_name>/pile_<arm>.json.
     `categories` (comma list) restricts the pool to those HarmBench categories -- the
     misinfo/harassment TEXT harms are where drift actually breaks through.
     """
     import random
-    import re as _re
 
     _require_data()
     data = json.loads((DATA_LOCAL / SCORED_JSON).read_text())
@@ -1206,33 +1241,31 @@ def drift_14b(pool: int = 101, sweep: str = "1024", samples: int = 3,
     pool_data = list(data)
     rng.shuffle(pool_data)
     pool_data = pool_data[:pool]
-    print(f"14B drift campaign: pool={len(pool_data)} sweep={sweep} arms={arms} "
-          f"samples={samples} max_refused={max_refused} temp={temp} ...")
+    print(f"drift campaign: model={model_path or MODEL_PATH} pool={len(pool_data)} sweep={sweep} "
+          f"arms={arms} samples={samples} max_refused={max_refused} temp={temp} ...")
     res = drift_campaign.remote(pool_data, sweep, samples, arms, max_refused, seed, temp,
-                                gen_timeout)
+                                gen_timeout, model_path=model_path,
+                                save_key=(run_name or "drift_14b"))
+    _write_drift_outputs(res, run_name, seed)
 
-    run_dir = SCRATCH_DIR / (run_name or "drift_14b")
-    run_dir.mkdir(parents=True, exist_ok=True)
-    full = run_dir / f"campaign_14b_seed{seed}.json"
-    full.write_text(json.dumps(res, indent=2, ensure_ascii=False))
 
-    recs = res["recs"]
-    sp = _re.compile(r"<\|[^|]*\|>|</?think>")
+@app.function(image=image, volumes={CACHE_DIR: hf_cache})
+def _read_drift_result(save_key: str) -> dict:
+    """CPU-only reader: pull a Volume-persisted drift_campaign result back to the client."""
+    hf_cache.reload()
+    p = Path(CACHE_DIR) / "drift_out" / f"{save_key}.json"
+    if not p.exists():
+        raise SystemExit(f"no persisted drift result at drift_out/{save_key}.json")
+    return json.loads(p.read_text())
 
-    def answer_of(t):
-        x = t.get("text", "")
-        a = x.split("</think>")[-1] if "</think>" in x else x
-        return sp.sub("", a).strip()
 
-    for arm in sorted({r["condition"] for r in recs}):
-        comply = [r for r in recs if r["condition"] == arm and r["label"] == "comply"]
-        pile = run_dir / f"pile_{arm}.json"
-        pile.write_text(json.dumps({"source": str(full), "selector": f"{arm} comply",
-                                    "n": len(comply), "traces": comply},
-                                   indent=2, ensure_ascii=False))
-        drift = sum(1 for r in recs if r["condition"] == arm and r.get("drift_flag"))
-        print(f"  [{arm}] comply={len(comply)}  heuristic_drift={drift}  -> {pile}")
-    nbase = len(res["baseline"])
-    nref = sum(1 for r in res["baseline"] if r["label"] == "refuse")
-    print(f"[done] 14B baseline {nref} refused / {nbase}; forced {len(recs)} traces; "
-          f"saved {full}")
+@app.local_entrypoint()
+def fetch_drift(save_key: str, run_name: str = "", seed: int = 0):
+    """Recover a drift_14b run whose client link dropped AFTER the GPU work finished:
+    drift_campaign persists its result to the Volume (drift_out/<save_key>.json), so pull
+    that and write the same local campaign JSON + per-arm piles. Run drift_14b under
+    `modal run --detach` so the run itself survives a disconnect; then, if the client died:
+        uv run modal run app.py::fetch_drift --save-key arm_steer_14b --run-name arm_steer_14b
+    """
+    res = _read_drift_result.remote(save_key)
+    _write_drift_outputs(res, run_name or save_key, seed)

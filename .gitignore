@@ -15,3 +15,4 @@ commitment/outputs/*_report.json
 
 # local-only run outputs (harmful trace completions live here; never commit)
 do_not_track/
+.claude/
