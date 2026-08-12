@@ -87,3 +87,62 @@ moved the harm rate. You cannot wear down a commitment by adding tokens after it
    result — the only new generation worth spending on for this question.
 2. **Token-level (not sentence-level) look at the `</think>` transition** in cliff traces, and/or the
    Arditi-style sentence resampling (2507.03167) once the refusal classifier (task 0.3) exists.
+
+---
+
+## Cross-scale addendum — 4B thinking-clip sweep (2026-08-10)
+
+Tier-0 truncate-and-resample sweep on **Qwen3-4B** (`safety/drift/run_clip_sweep.py`;
+`do_not_track/drift/clip_sweep_ref41_seed0.json`): 41 baseline-refused prompts, generate the natural
+trace once, re-answer from truncations at fracs 0.0/0.2/0.4/0.6/0.8/0.9/1.0, heuristic-scored.
+
+**Result — the 4B has no formation point; its refusal is front-loaded, not CoT-formed.**
+
+| clip frac | 0.0 | 0.2 | 0.4 | 0.6 | 0.8 | 0.9 | 1.0 |
+|---|---|---|---|---|---|---|---|
+| refuse_rate | 0.71 | 0.66 | 0.73 | 0.61 | 0.61 | 0.63 | 0.59 |
+
+The curve is **flat, slightly declining** — with *zero* reasoning (frac 0.0) the 4B already refuses
+71%, and the full chain doesn't build it. Per-prompt (frac 0.0→1.0): **30/41 outcome-stable**
+regardless of clip; 8 erode, 3 build. So on the 4B the refusal is essentially the prompt→answer
+mapping — the CoT is not where the decision is made, and more reasoning weakly *erodes* it (diffuse,
+not a cliff).
+
+**The cross-scale picture:** refusal is **front-loaded on the 4B** but **late-forming / boundary-
+concentrated on the 14B** (the main finding above). A real model-size difference in *where refusal
+lives*. Consequences: (a) the CoT-erosion drift construct and tier-1 time-gated steering belong on the
+**14B**, not the 4B (nothing in the 4B CoT to gate to / erode); (b) this retroactively explains
+`arm_b`'s 28/28 harmful traces having `early_refuse=0` — there was no CoT-localized refusal to erode.
+
+Caveats: heuristic scorer (floor); each clip is a fresh re-generation, so frac-1.0 = 0.59 ≠ the pinned
+baseline refusal (read the *shape*, not the absolute level); single seed (73% per-prompt stability
+argues the flatness is real, not variance).
+
+### 14B clip sweep — the mirror image (confirms late formation)
+
+Same instrument on **Qwen3-14B** (Modal; `do_not_track/modal/clip_14b/clip_sweep_14b.json`), n=22
+(the 14B's own baseline-refused prompts):
+
+| clip frac | 0.0 | 0.2 | 0.4 | 0.6 | 0.8 | 0.9 | 1.0 |
+|---|---|---|---|---|---|---|---|
+| refuse_rate | **0.41** | 0.59 | 0.59 | 0.50 | **0.77** | 0.77 | 0.77 |
+
+The 14B curve **rises and plateaus** (0.41 with no reasoning → 0.77 from frac 0.8) — the opposite of
+the 4B's flat/declining curve. Per-prompt: **9 build (comply→refuse), 1 erode** (vs the 4B's 3 build /
+8 erode). So **the 14B manufactures its refusal in the CoT, consolidating ~frac 0.7–0.8** (the last
+20–30% of reasoning). This **confirms the main finding above** (14B refusal is late-forming /
+boundary-concentrated) via a *second, independent method* — the clip-and-resample sweep agrees with the
+positional refusal curve.
+
+**Net cross-scale, doubly-sourced:** refusal is **front-loaded on the 4B** (decided at the answer, not
+in the CoT) and **late-forming on the 14B** (~frac 0.75, in the CoT), each shown by *both* the
+natural-anchor positional curve *and* the thinking-clip sweep. Tier-1 time-gated steering therefore has
+a gate point on the 14B (frac ≳ 0.7–0.8) and none on the 4B. Caveat: 14B n=22 (thin, but the 36-point
+rise and 9-vs-1 split are unambiguous).
+
+**Confirmed at larger n (n=31).** A thicker 14B run (its own baseline over all 101 HarmBench prompts →
+31 refused; `do_not_track/modal/clip_14b_n40/`) reproduces the rise — refuse_rate 0.42 → 0.61/0.58 →
+0.71 @0.8 → **0.84 @0.9** → 0.81, with **BUILDS 14 / ERODES 2**. It pushes the consolidation point a
+touch later: **the formation point is ~frac 0.8–0.9** (the last ~10–20% of the reasoning). The 14B
+late-forming refusal is thus agreed by the positional probe *and* the clip sweep at *two* sample sizes.
+**Tier-1 gate point = frac ≳ 0.8.**

@@ -1269,3 +1269,348 @@ def fetch_drift(save_key: str, run_name: str = "", seed: int = 0):
     """
     res = _read_drift_result.remote(save_key)
     _write_drift_outputs(res, run_name or save_key, seed)
+
+
+@app.function(image=image, gpu="L40S", timeout=14400, retries=0, secrets=[hf_secret],
+              volumes={CACHE_DIR: hf_cache})
+def clip_campaign(pool_data: list, fracs: str, seed: int, temp: float, max_refused: int,
+                  max_think: int, max_answer: int, gen_timeout: int, model_path: str = "",
+                  save_key: str = "") -> dict:
+    """Tier-0 thinking-clip / truncate-and-resample sweep on `model_path` (default the 14B
+    anchor). Phase 1: natural baseline over pool_data -> the model's OWN refused subset
+    (capped at max_refused). Phase 2: run the SHIPPED run_clip_sweep.clip_sweep per refused
+    prompt (natural trace once, re-answer from truncations at each frac; heuristic-scored) ->
+    the refusal-FORMATION curve. Persists to the Volume (survives a client disconnect)."""
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, LIB_REMOTE)
+    sys.path.insert(0, COMMITMENT_REMOTE)
+    sys.path.insert(0, f"{SAFETY_REMOTE}/drift")
+
+    import run_drift as R
+    R.MODEL = model_path or MODEL_PATH
+    print(f"[clip_campaign] model={R.MODEL}  pool={len(pool_data)}  max_refused={max_refused}  fracs={fracs}")
+    model, tok = R.load()
+    import run_clip_sweep as CS
+    fr = [float(x) for x in fracs.split(",")]
+    # Phase 1: natural baseline -> the model's own refused subset
+    refused, scanned = [], 0
+    for p in pool_data:
+        scanned += 1
+        text, _ = R.gen_natural(model, tok, R.build_ids(model, tok, p["instruction"]),
+                                max_think, seed, gen_timeout=gen_timeout)
+        if R.score(text)[0] == "refuse":
+            refused.append({"i": p.get("i", scanned - 1), "instruction": p["instruction"],
+                            "category": p.get("category", "_"),
+                            "behavior_id": p.get("behavior_id")})
+            if max_refused and len(refused) >= max_refused:
+                break
+    print(f"[clip_campaign] baseline: {len(refused)} refused / {scanned} scanned")
+    # Phase 2: clip sweep on the refused
+    recs = []
+    for it in refused:
+        ids = R.build_ids(model, tok, it["instruction"])
+        tl, closed, res = CS.clip_sweep(model, tok, ids, fr, seed * 100000 + int(it["i"]),
+                                        max_think=max_think, max_answer=max_answer,
+                                        gen_timeout=gen_timeout, temp=temp)
+        recs.append({"i": it["i"], "behavior_id": it.get("behavior_id"),
+                     "category": it.get("category", "_"), "request": it["instruction"],
+                     "natural_think_len": tl, "think_closed": closed, "results": res})
+    result = _jsonify({"recs": recs, "meta": {"model": R.MODEL, "fracs": fr, "seed": seed,
+                                              "temp": temp, "n": len(recs),
+                                              "pool": len(pool_data), "scanned": scanned}})
+    if save_key:
+        out = Path(CACHE_DIR) / "drift_out"
+        out.mkdir(parents=True, exist_ok=True)
+        (out / f"{save_key}.json").write_text(json.dumps(result, ensure_ascii=False))
+        hf_cache.commit()
+        print(f"[clip_campaign] persisted -> Volume drift_out/{save_key}.json")
+    return result
+
+
+@app.local_entrypoint()
+def clip_14b(pool: int = 110, fracs: str = "0.0,0.2,0.4,0.6,0.8,0.9,1.0", max_refused: int = 40,
+             seed: int = 0, temp: float = 0.6, max_think: int = 1200, max_answer: int = 600,
+             gen_timeout: int = 300, run_name: str = "clip_14b", model_path: str = "",
+             categories: str = ""):
+    """Tier-0 clip sweep on the 14B (Modal L40S) — pins its refusal-formation point. Does its
+    OWN Phase-1 baseline over `pool` HarmBench prompts to find the model's refused subset
+    (capped at max_refused), then clip-sweeps them. Run under `modal run --detach`.
+        uv run modal run app.py::clip_14b --pool 110 --max-refused 40 --run-name clip_14b_n40
+    """
+    import random
+    from collections import Counter, defaultdict
+    _require_data()
+    data = json.loads((DATA_LOCAL / SCORED_JSON).read_text())
+    if categories:
+        cats = {c.strip() for c in categories.split(",")}
+        data = [r for r in data if r.get("category") in cats]
+    rng = random.Random(seed)
+    pool_data = list(data)
+    rng.shuffle(pool_data)
+    pool_data = pool_data[:pool]
+    print(f"clip sweep: model={model_path or MODEL_PATH} pool={len(pool_data)} "
+          f"max_refused={max_refused} fracs={fracs}")
+    res = clip_campaign.remote(pool_data, fracs, seed, temp, max_refused, max_think, max_answer,
+                               gen_timeout, model_path, run_name)
+
+    run_dir = SCRATCH_DIR / run_name
+    run_dir.mkdir(parents=True, exist_ok=True)
+    out = run_dir / "clip_sweep_14b.json"
+    out.write_text(json.dumps(res, indent=2, ensure_ascii=False))
+
+    bf = defaultdict(Counter)
+    for r in res["recs"]:
+        for y in r["results"]:
+            bf[y["frac"]][y["label"]] += 1
+    print("\n===== 14B formation curve (answer label vs clip fraction) =====")
+    print(f"{'frac':>6} {'refuse':>7} {'comply':>7} {'none':>6} {'refuse_rate':>12}")
+    for frv in sorted(bf):
+        c = bf[frv]; ref = c.get("refuse", 0); com = c.get("comply", 0); non = c.get("none", 0)
+        rate = ref / (ref + com) if (ref + com) else float("nan")
+        print(f"{frv:>6} {ref:>7} {com:>7} {non:>6} {rate:>12.2f}")
+    print(f"[done] {len(res['recs'])} prompts; saved {out}")
+
+
+@app.function(image=image, gpu="A100-80GB", timeout=5400, retries=0, secrets=[hf_secret],
+              volumes={CACHE_DIR: hf_cache})
+def steer_campaign(pool_data: list, fracs: str, seed: int, temp: float, max_refused: int,
+                   layers: str, n_extract: int, max_think: int, max_new: int, gen_timeout: int,
+                   coeff: float = 1.0, model_path: str = "", save_key: str = "") -> dict:
+    """Method 1 time-gated steered-continuation sweep (EROSION vs PREVENTION) on `model_path`.
+    Phase 1: baseline over pool_data -> refused. For each layer in `layers`, extract the refusal
+    direction (diff-in-means, AdvBench vs Alpaca). Phase 2: per refused prompt, generate ONE
+    natural trace (shared across layers) then run the SHIPPED run_steer_sweep.steer_sweep with
+    decode-gated PARTIAL ablation (`coeff`<1.0 = gentler). Checkpoints to the Volume per prompt."""
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, LIB_REMOTE)
+    sys.path.insert(0, COMMITMENT_REMOTE)
+    sys.path.insert(0, f"{SAFETY_REMOTE}/drift")
+
+    import run_drift as R
+    R.MODEL = model_path or MODEL_PATH
+    Ls = [int(x) for x in str(layers).split(",")]
+    fr = [float(x) for x in fracs.split(",")]
+    print(f"[steer_campaign] model={R.MODEL} pool={len(pool_data)} layers={Ls} coeff={coeff} fracs={fr}")
+    model, tok = R.load()
+    import run_steer_sweep as SS
+
+    def _persist(rs):
+        r = _jsonify({"recs": rs, "meta": {"model": R.MODEL, "fracs": fr, "layers": Ls,
+                                           "coeff": coeff, "seed": seed, "temp": temp,
+                                           "n_traces": len(rs), "pool": len(pool_data)}})
+        if save_key:
+            out = Path(CACHE_DIR) / "drift_out"
+            out.mkdir(parents=True, exist_ok=True)
+            (out / f"{save_key}.json").write_text(json.dumps(r, ensure_ascii=False))
+            hf_cache.commit()
+        return r
+
+    refused, scanned = [], 0
+    for p in pool_data:
+        scanned += 1
+        text, _ = R.gen_natural(model, tok, R.build_ids(model, tok, p["instruction"]),
+                                max_think, seed, gen_timeout=gen_timeout)
+        if R.score(text)[0] == "refuse":
+            refused.append({"i": p.get("i", scanned - 1), "instruction": p["instruction"],
+                            "category": p.get("category", "_"),
+                            "behavior_id": p.get("behavior_id")})
+            if max_refused and len(refused) >= max_refused:
+                break
+    print(f"[steer_campaign] baseline: {len(refused)} refused / {scanned}")
+
+    directions = {L: SS.extract_direction(model, tok, L, -1, n_extract, seed) for L in Ls}
+
+    recs = []
+    for it in refused:
+        ids = R.build_ids(model, tok, it["instruction"])
+        s = seed * 100000 + int(it["i"])
+        think_ids, tl = SS._natural_think(model, tok, ids, max_think, s, gen_timeout, temp)
+        for L in Ls:
+            _, res = SS.steer_sweep(model, tok, directions[L], ids, fr, s, max_think=max_think,
+                                    max_new=max_new, gen_timeout=gen_timeout, temp=temp,
+                                    coeff=coeff, think_ids=think_ids, tl=tl)
+            recs.append({"i": it["i"], "layer": L, "coeff": coeff,
+                         "behavior_id": it.get("behavior_id"), "category": it.get("category", "_"),
+                         "request": it["instruction"], "natural_think_len": tl, "results": res})
+        _persist(recs)
+    result = _persist(recs)
+    if save_key:
+        print(f"[steer_campaign] persisted -> Volume drift_out/{save_key}.json")
+    return result
+
+
+@app.local_entrypoint()
+def steer_14b(pool: int = 18, fracs: str = "0.0,0.8", max_refused: int = 6,
+              layers: str = "16,22", coeff: float = 0.5, n_extract: int = 128, seed: int = 0,
+              temp: float = 0.6, max_think: int = 1200, max_new: int = 1400, gen_timeout: int = 300,
+              run_name: str = "steer_14b_v2", model_path: str = "", categories: str = ""):
+    """Method 1 v2 steered-continuation sweep on the 14B (Modal A100-80GB), gated to the ~0.8
+    formation point, with GENTLER partial ablation (`coeff`<1.0) swept over `layers` to find a
+    direction that removes refusal without the coherence collapse v1 hit. Run under `--detach`.
+        uv run modal run app.py::steer_14b --run-name steer_14b_v2
+    """
+    import random
+    _require_data()
+    data = json.loads((DATA_LOCAL / SCORED_JSON).read_text())
+    if categories:
+        cats = {c.strip() for c in categories.split(",")}
+        data = [r for r in data if r.get("category") in cats]
+    rng = random.Random(seed)
+    pool_data = list(data)
+    rng.shuffle(pool_data)
+    pool_data = pool_data[:pool]
+    print(f"steer v2: model={model_path or MODEL_PATH} pool={len(pool_data)} "
+          f"layers={layers} coeff={coeff} max_refused={max_refused} fracs={fracs}")
+    res = steer_campaign.remote(pool_data, fracs, seed, temp, max_refused, layers, n_extract,
+                                max_think, max_new, gen_timeout, coeff, model_path, run_name)
+
+    run_dir = SCRATCH_DIR / run_name
+    run_dir.mkdir(parents=True, exist_ok=True)
+    out = run_dir / "steer_sweep_14b.json"
+    out.write_text(json.dumps(res, indent=2, ensure_ascii=False))
+
+    from collections import Counter, defaultdict
+    fr = [float(x) for x in fracs.split(",")]
+    Ls = [int(x) for x in str(layers).split(",")]
+    bf = defaultdict(Counter)
+    for r in res["recs"]:
+        for y in r["results"]:
+            bf[(r["layer"], y["frac"])]["s_" + y["steer"]] += 1
+            bf[(r["layer"], y["frac"])]["u_" + y["unsteer"]] += 1
+    print(f"\n===== 14B v2 EROSION vs PREVENTION (coeff={coeff}; steered vs un-steered) =====")
+    print(f"{'layer':>6} {'frac':>6} {'steer_ref':>10} {'unsteer_ref':>12} {'erosion_eff':>12} {'steer_none':>11}")
+    for L in Ls:
+        for frv in fr:
+            c = bf[(L, frv)]
+            sref = c["s_refuse"] / max(1, c["s_refuse"] + c["s_comply"])
+            uref = c["u_refuse"] / max(1, c["u_refuse"] + c["u_comply"])
+            tag = "  <- PREVENTION" if frv == 0.0 else ("  <- EROSION" if frv >= 0.8 else "")
+            print(f"{L:>6} {frv:>6} {sref:>10.2f} {uref:>12.2f} {uref - sref:>12.2f} {c['s_none']:>11}{tag}")
+    print(f"[done] {len(res['recs'])} traces; saved {out}")
+
+
+@app.function(image=image, gpu="A100-80GB", timeout=5400, retries=0, secrets=[hf_secret],
+              volumes={CACHE_DIR: hf_cache})
+def suphead_campaign(pool_data: list, fracs: str, seed: int, temp: float, max_refused: int,
+                     layer: int, k: int, coeff: float, n_extract: int, max_think: int, max_new: int,
+                     gen_timeout: int, model_path: str = "", save_key: str = "") -> dict:
+    """Method 2 suppression-head amplification (EROSION vs PREVENTION) on `model_path`.
+    Phase 1: baseline over pool_data -> refused. Extract the refusal direction (diff-in-means) at
+    `layer`, then per-head ATTRIBUTION (c_h . d_hat) -> top-`k` refusal-writing heads. Phase 2: per
+    refused prompt, one natural trace, then run run_suphead.suphead_sweep (surgical decode-gated
+    ablation of the refusal direction on those k heads only, `coeff`>1 = amplify). Checkpoints per
+    prompt to the Volume."""
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, LIB_REMOTE)
+    sys.path.insert(0, COMMITMENT_REMOTE)
+    sys.path.insert(0, f"{SAFETY_REMOTE}/drift")
+
+    import run_drift as R
+    R.MODEL = model_path or MODEL_PATH
+    fr = [float(x) for x in fracs.split(",")]
+    print(f"[suphead_campaign] model={R.MODEL} pool={len(pool_data)} layer={layer} k={k} "
+          f"coeff={coeff} fracs={fr}")
+    model, tok = R.load()
+    import run_suphead as SH
+
+    def _persist(rs, heads_meta):
+        r = _jsonify({"recs": rs, "meta": {"model": R.MODEL, "fracs": fr, "layer": layer, "k": k,
+                                           "coeff": coeff, "seed": seed, "temp": temp,
+                                           "n_traces": len(rs), "pool": len(pool_data),
+                                           "top_heads": heads_meta}})
+        if save_key:
+            out = Path(CACHE_DIR) / "drift_out"
+            out.mkdir(parents=True, exist_ok=True)
+            (out / f"{save_key}.json").write_text(json.dumps(r, ensure_ascii=False))
+            hf_cache.commit()
+        return r
+
+    refused, scanned = [], 0
+    for p in pool_data:
+        scanned += 1
+        text, _ = R.gen_natural(model, tok, R.build_ids(model, tok, p["instruction"]),
+                                max_think, seed, gen_timeout=gen_timeout)
+        if R.score(text)[0] == "refuse":
+            refused.append({"i": p.get("i", scanned - 1), "instruction": p["instruction"],
+                            "category": p.get("category", "_"),
+                            "behavior_id": p.get("behavior_id")})
+            if max_refused and len(refused) >= max_refused:
+                break
+    print(f"[suphead_campaign] baseline: {len(refused)} refused / {scanned}")
+
+    direction = SH.extract_direction(model, tok, layer, -1, n_extract, seed)
+    harmful = [r["instruction"] for r in
+               json.loads((SH.DATA / "advbench_extract.json").read_text(encoding="utf-8"))][:n_extract]
+    hscore = SH.head_attribution(model, tok, direction, harmful)
+    head_mask = SH.topk_heads(hscore, k)
+    heads_meta = sorted(([li, h, round(float(hscore[li, h]), 3)] for li in head_mask
+                         for h in head_mask[li]), key=lambda t: -t[2])
+    print(f"[suphead_campaign] top-{k} heads over {len(head_mask)} layers; strongest: " +
+          " ".join(f"L{li}h{h}:{s}" for li, h, s in heads_meta[:8]))
+
+    recs = []
+    for it in refused:
+        ids = R.build_ids(model, tok, it["instruction"])
+        s = seed * 100000 + int(it["i"])
+        tl, res = SH.suphead_sweep(model, tok, direction, head_mask, ids, fr, s,
+                                   max_think=max_think, max_new=max_new, gen_timeout=gen_timeout,
+                                   temp=temp, coeff=coeff)
+        recs.append({"i": it["i"], "behavior_id": it.get("behavior_id"),
+                     "category": it.get("category", "_"), "request": it["instruction"],
+                     "natural_think_len": tl, "results": res})
+        _persist(recs, heads_meta)
+    result = _persist(recs, heads_meta)
+    if save_key:
+        print(f"[suphead_campaign] persisted -> Volume drift_out/{save_key}.json")
+    return result
+
+
+@app.local_entrypoint()
+def suphead_14b(pool: int = 35, fracs: str = "0.0,0.8", max_refused: int = 12, layer: int = 20,
+                k: int = 40, coeff: float = 1.0, n_extract: int = 128, seed: int = 0,
+                temp: float = 0.6, max_think: int = 1200, max_new: int = 1400, gen_timeout: int = 300,
+                run_name: str = "suphead_14b_v1", model_path: str = "", categories: str = ""):
+    """Method 2 v1 suppression-head amplification on the 14B (Modal A100-80GB), gated to the ~0.8
+    formation point. Touches only the top-`k` refusal-writing heads (surgical) vs Method 1's global
+    ablation. Run under `modal run --detach`.
+        uv run modal run app.py::suphead_14b --run-name suphead_14b_v1
+    """
+    import random
+    _require_data()
+    data = json.loads((DATA_LOCAL / SCORED_JSON).read_text())
+    if categories:
+        cats = {c.strip() for c in categories.split(",")}
+        data = [r for r in data if r.get("category") in cats]
+    rng = random.Random(seed)
+    pool_data = list(data)
+    rng.shuffle(pool_data)
+    pool_data = pool_data[:pool]
+    print(f"suphead v1: model={model_path or MODEL_PATH} pool={len(pool_data)} layer={layer} "
+          f"k={k} coeff={coeff} max_refused={max_refused} fracs={fracs}")
+    res = suphead_campaign.remote(pool_data, fracs, seed, temp, max_refused, layer, k, coeff,
+                                  n_extract, max_think, max_new, gen_timeout, model_path, run_name)
+
+    run_dir = SCRATCH_DIR / run_name
+    run_dir.mkdir(parents=True, exist_ok=True)
+    out = run_dir / "suphead_sweep_14b.json"
+    out.write_text(json.dumps(res, indent=2, ensure_ascii=False))
+
+    from collections import Counter, defaultdict
+    fr = [float(x) for x in fracs.split(",")]
+    bf = defaultdict(Counter)
+    for r in res["recs"]:
+        for y in r["results"]:
+            bf[y["frac"]]["s_" + y["steer"]] += 1
+            bf[y["frac"]]["u_" + y["unsteer"]] += 1
+    print(f"\n===== 14B SUPPRESSION-HEAD v1 (k={k}, coeff={coeff}; steered vs un-steered) =====")
+    print(f"{'frac':>6} {'steer_ref':>10} {'unsteer_ref':>12} {'erosion_eff':>12} {'steer_none':>11}")
+    for frv in fr:
+        c = bf[frv]
+        sref = c["s_refuse"] / max(1, c["s_refuse"] + c["s_comply"])
+        uref = c["u_refuse"] / max(1, c["u_refuse"] + c["u_comply"])
+        tag = "  <- PREVENTION" if frv == 0.0 else ("  <- EROSION" if frv >= 0.8 else "")
+        print(f"{frv:>6} {sref:>10.2f} {uref:>12.2f} {uref - sref:>12.2f} {c['s_none']:>11}{tag}")
+    print(f"[done] {len(res['recs'])} traces; saved {out}")
