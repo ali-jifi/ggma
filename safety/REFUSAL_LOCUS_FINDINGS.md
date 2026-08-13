@@ -88,6 +88,26 @@ moved the harm rate. You cannot wear down a commitment by adding tokens after it
 2. **Token-level (not sentence-level) look at the `</think>` transition** in cliff traces, and/or the
    Arditi-style sentence resampling (2507.03167) once the refusal classifier (task 0.3) exists.
 
+> ### Update 2026-08-13 — this document's recommendation was acted on, and the result was a NULL
+>
+> The "productive instrument" identified above — intervene in the **late refusal-formation window**
+> rather than forcing longer budgets — was built and run as the formation-screened drift-harm
+> experiment (`safety/drift/DRIFT_HARM_RESULT.md`). Gating a suppression-head intervention to
+> frac ≥ 0.8 on **formation-screened** 14B traces, scoring with HarmBench against a **paired unsteered
+> control**, n=120 per dose: **no harm above control at coeff 4, 8, or 16**; formation ∧ erosion ∧ harm
+> co-occurred on **1/120**. Stance eroded on 22% of formed refusals but converted to harm almost never.
+>
+> So the redirect in this document was **correct about where refusal lives and correct that the forcing
+> family was the wrong lever** — but acting in the right window did not produce drift-into-harm either.
+> The locus finding stands (and is now externally corroborated by arXiv **2510.06036**, "Refusal Falls
+> off a Cliff", whose positional probe and deep-layer *refusal suppression heads* independently
+> reproduce both our boundary result and our L37–39 head attribution). The erosion hypothesis it
+> motivated does not.
+>
+> Also note the heuristic caveat below is now sharper than "a floor": the same run showed refusal
+> **stance** movement dissociating from **harm** by a wide margin, so any phrase-based refusal metric
+> must never be read as a harm proxy.
+
 ---
 
 ## Cross-scale addendum — 4B thinking-clip sweep (2026-08-10)

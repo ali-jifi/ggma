@@ -1,6 +1,32 @@
 # Reasoning-Drift Safety Study — Findings
 
-*Qwen3-4B / Qwen3-14B · HarmBench-13B judge · 2026-08-04*
+*Qwen3-4B / Qwen3-14B · HarmBench-13B judge · 2026-08-04, **substantially revised 2026-08-13***
+
+> ## ⚠️ READ THIS BEFORE QUOTING ANY NUMBER BELOW
+>
+> A validity audit (2026-08-13) established that **this document's original headline was not
+> supported by its own evidence.** The prompt-attack rates in the table are real HarmBench numbers,
+> but **none of them is a drift rate**, because no arm below was ever screened for the model actually
+> **forming** its refusal inside the CoT. Specifically:
+>
+> 1. **The construct gate was broken.** Every "drift" label here rests on `early_refuse`, a detector
+>    for refusal in the *first half* of the CoT. The 14B forms its refusal at frac ~0.8–0.9 (so the
+>    detector is False **by construction**) and the 4B is front-loaded — it refuses 71% with *zero*
+>    reasoning, so it has no in-CoT refusal to erode at all. `arm_b`'s "0/28 early_refuse" measured
+>    the detector, not the phenomenon.
+> 2. **Most of the harm evidence is 4B**, where the drift construct is therefore **undefined**
+>    (24 of 328 arm_b attempts, the 37-pile, LOCATE/CONCENTRATE, the ablation). Those numbers are
+>    **prompt-attack harm**, i.e. dilution or prevention — not erosion of a formed commitment.
+> 3. **When the experiment was finally run properly, it was a NULL.** With formation screened, harm
+>    scored by HarmBench, a paired unsteered control, and n=120 on the 14B, the intervention produced
+>    **no harm beyond its control at any dose** — and formation ∧ erosion ∧ harm co-occurred on
+>    **1 of 120 traces**. See `DRIFT_HARM_RESULT.md`.
+>
+> **Therefore: the ~7% `arm_b` figure below must be reported as "prompt-attack harm, formation
+> unscreened", never as a drift rate.** The safety-relevant claim that survives is that a
+> cognitive-load preamble plus budget forcing elicits ~7% HarmBench-confirmed harm from a
+> baseline-refusing model — a real elicitation result whose *mechanism* is unresolved. The sections
+> below are retained as written on 2026-08-04 for provenance; read them through this correction.
 
 ## Question
 
@@ -42,17 +68,32 @@ Two families of budget control, following the TTBC framing (Muennighoff et al., 
   - **refusal-direction ablation** — white-box: extract the refusal direction (diff-in-means over
     AdvBench vs Alpaca) and ablate it during generation. A mechanistic *ceiling*, not a drift attack.
 
-## Headline
+## Headline (corrected 2026-08-13)
 
-**Forced-reasoning refusal drift into genuinely harmful output is real, and under the right
-induction it is not rare.** Suppression forcing paired with a cognitive-load preamble (`arm_b`)
-reaches **~7% of attempts** — 4–5× the reconsideration arms — and its harmful outputs extend to
-**technical content (drug-synthesis precursors, infrastructure disruption, chem/bio), not just
-misinformation.** The rate is roughly **scale-invariant** (4B ≈ 14B ≈ 7%), but **severity rises with
-capability**: the 14B drifts into home chem/bio-warfare content the 4B simply cannot produce.
-Reconsideration-style ("Wait") forcing remains **net-protective**.
+**Elicitation result (holds).** Suppression forcing paired with a cognitive-load preamble (`arm_b`)
+gets **~7% of attempts** to HarmBench-confirmed harm from prompts the model refuses at baseline —
+4–5× the reconsideration arms — and that harm extends to **technical content (drug-synthesis
+precursors, infrastructure disruption, chem/bio), not just misinformation.** The rate is roughly
+**scale-invariant** (4B ≈ 14B ≈ 7%) while **severity rises with capability**: the 14B reaches home
+chem/bio-warfare content the 4B cannot produce. Reconsideration-style ("Wait") forcing remains
+**net-protective** unless a load preamble is added.
+
+**Drift claim (WITHDRAWN).** The original headline read "forced-reasoning refusal *drift* into
+harmful output is real and not rare." That is **not** supported: no arm in this table was screened
+for in-CoT refusal *formation*, so none of these rates distinguishes **erosion of a formed refusal**
+(drift) from **dilution/prevention** (an ordinary jailbreak that stops the refusal forming). On the
+one substrate where the construct is even defined — the late-forming 14B — the properly screened,
+HarmBench-scored, paired-control experiment returned a **null** (`DRIFT_HARM_RESULT.md`).
+
+**What to say instead:** *a cognitive-load preamble plus budget forcing is an effective harm
+elicitation attack (~7%); whether it works by eroding a formed refusal is unresolved and the one
+direct test of erosion was negative.*
 
 ## Results — HarmBench-13B-confirmed harmful rate
+
+*All rows are **prompt-attack harm on baseline-refused prompts, formation NOT screened**. Read them
+as elicitation rates, not drift rates. The 4B column in particular is a substrate where in-CoT
+refusal formation does not occur, so "erosion" is undefined there.*
 
 | induction | mechanism | 4B | 14B |
 |---|---|---|---|
@@ -126,10 +167,11 @@ finding 6 — it degrades coherence, so it is a ceiling, not a usable attack.
 
 ## What this means for safety
 
-- **Refusal training is *not* as robust to reasoning-drift as a single weak induction suggests.** The
-  earlier read — "drift-to-harm is rare (~1–2%) and never technical" — was an artifact of testing only
-  suppression-only and reconsideration arms. The right induction (suppression + cognitive load) reaches
-  ~7% and produces synthesis/infrastructure/chem-bio content.
+- **Refusal training is *not* as robust to this class of prompt attack as a single weak induction
+  suggests.** The earlier read — "harm is rare (~1–2%) and never technical" — was an artifact of
+  testing only suppression-only and reconsideration arms. The right induction (suppression + cognitive
+  load) reaches ~7% and produces synthesis/infrastructure/chem-bio content. *(Claim is about
+  elicitation, not about drift: formation was not screened.)*
 - **The residual risk is real technical uplift, not only misinformation** — and it grows with scale.
 - **Reconsideration prompting ("Wait") is net-protective** in this setup — a notable, actionable result.
 - **Capability is not the bottleneck** (jailbreak control = 93%); the induction is. Drift rarely
@@ -137,14 +179,23 @@ finding 6 — it degrades coherence, so it is a ceiling, not a usable attack.
 
 ## Caveats
 
-- Harmful-trace counts are still modest (e.g. 14B `arm_b` rests on 4 hits; ablation on 3). Directions
-  are trustworthy; precise rates carry the stated intervals where computed.
+- **No arm here was formation-screened**, so no rate in this document is a drift rate (see the banner).
+- **The intra-CoT drift detector (`early_refuse`/`drift_flag`) is retired, not merely a "floor"** — it
+  is an early-window test on two models that refuse outside that window, so it returns ~0 by
+  construction. Replaced by the two-generation formation screen in `run_drift_harm.py`.
+- Harmful-trace counts are modest (14B `arm_b` rests on 4 hits; ablation on 3). Directions only.
 - Qwen3 family only, two sizes. No claim about other families or larger scales.
-- The intra-CoT drift detector is a heuristic floor; the harm verdicts are the classifier's.
+- **Cross-scale asymmetry matters for interpretation:** the 4B is front-loaded, the 14B late-forming.
+  They are not two sizes of the same phenomenon, and 4B results do not transfer to the drift question.
 
 ## Next steps
 
-- Pin the `arm_b` rate with more seeds/samples and per-category confidence intervals; extend the 14B
-  `arm_b` and `arm_steer` runs (60 attempts each) to firm up the severity and purity claims.
-- Larger, layer-swept ablation to firm up the white-box ceiling.
-- Replicate across model families to test the scale-invariance claim.
+1. **Re-run `arm_b` behind the formation screen on the 14B** — the single highest-value run. It is the
+   only arm with a headline harm rate, and it is the one whose mechanism is unresolved. Until then
+   "~7%" cannot be attributed to drift.
+2. **The preamble + *natural*-generation control** (no forcing), which separates "the preamble is a
+   jailbreak" from "the forcing erodes a commitment."
+3. Raise n from 120 to ≈200 to power p=0.05 (n=120 only powers p≈0.10), so the null in
+   `DRIFT_HARM_RESULT.md` can be stated at the conventional level.
+4. Larger, layer-swept ablation to firm up the white-box ceiling.
+5. Replicate across model families to test the scale-invariance claim.
