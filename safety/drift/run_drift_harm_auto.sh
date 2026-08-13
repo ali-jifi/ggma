@@ -23,6 +23,7 @@ MAX_KEPT="${MAX_KEPT:-30}"       # formation-screened prompts, screened once and
 SAMPLES="${SAMPLES:-4}"
 LAYER="${LAYER:-20}"
 K="${K:-40}"
+BATCH="${BATCH:-4}"
 POOL="${POOL:-harmbench_all.json}"
 FREE_MIB="${FREE_MIB:-500}"      # grabbable (exclusive mode) only if ~nothing is resident -> full 40GB
 POLL="${POLL:-30}"
@@ -53,8 +54,8 @@ echo "$(date +%H:%M:%S) [gen] done -> $LOGDIR/${RUN}_gen.log"
 
 # --- Stage 2: score (needs HarmBench-13B) ---
 G=$(wait_gpu); echo "$(date +%H:%M:%S) [score] GPU $G"
-CUDA_VISIBLE_DEVICES=$G PYTHONPATH=safety/vendor \
-  python safety/drift/run_drift_harm.py --stage score --run "$RUN" \
+CUDA_VISIBLE_DEVICES=$G PYTHONPATH=safety/vendor PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+  python safety/drift/run_drift_harm.py --stage score --run "$RUN" --batch-size "$BATCH" \
     > "$LOGDIR/${RUN}_score.log" 2>&1
 [ $? -ne 0 ] && { echo "[score] FAILED -> $LOGDIR/${RUN}_score.log"; tail -5 "$LOGDIR/${RUN}_score.log"; exit 1; }
 echo "$(date +%H:%M:%S) [score] done -> $LOGDIR/${RUN}_score.log"
