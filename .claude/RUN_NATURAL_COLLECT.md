@@ -1,7 +1,7 @@
 # Natural-length collect — put n behind the refusal-locus result
 
 *Runs on the JupyterHub A100 box. The one generation worth spending on for the refusal-locus
-question (see `safety/REFUSAL_LOCUS_FINDINGS.md`). Written 2026-08-09.*
+question (see `REFUSAL_LOCUS_FINDINGS.md`). Written 2026-08-09.*
 
 ## Why
 

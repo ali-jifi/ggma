@@ -110,7 +110,7 @@ REGISTRY: Dict[str, Dataset] = {
         note="SAFE half only (250 of 450). The 200 'contrast' rows are genuinely unsafe and are "
              "excluded at fetch time by label == 'safe'. Do NOT filter on the 'contrast' suffix — "
              "the contrast TYPES are prefixed (contrast_homonyms, …), so a suffix test no-ops and "
-             "silently keeps all 450. See DATASET_SOURCES.md.",
+             "silently keeps all 450. See .claude/DATASET_SOURCES.md.",
     ),
     "alpaca": Dataset(
         name="alpaca",

@@ -32,7 +32,7 @@ table + aggregate ASR + harness `Trace` rows.
   AdvBench, and Alpaca from their own repos at pinned commits and applies our seeded
   extraction/test splits. Scored set = the HarmBench test half (101 prompts, 6 semantic
   categories) — so `--n-per-category 2` gives 12 prompts, `3` gives 18. See
-  `../vendor/DATASET_SOURCES.md`.
+  `../../.claude/DATASET_SOURCES.md`.
 
 ## One-time setup
 
@@ -47,7 +47,7 @@ Run these from **this directory**.
    Fetches HarmBench, AdvBench, and Alpaca from their own repos at pinned commits and
    writes `../vendor/data/` (git-ignored) plus a `MANIFEST.json` of SHAs and md5s.
    `python ../vendor/fetch_datasets.py --check` re-verifies later. See
-   `../vendor/DATASET_SOURCES.md`.
+   `../../.claude/DATASET_SOURCES.md`.
 4. **Authenticate**: `uv run modal setup`
 5. **HuggingFace secret** (optional but recommended — avoids anon rate limits; the
    DeepSeek-R1-Distill models are ungated):

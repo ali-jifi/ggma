@@ -181,7 +181,7 @@ fifths → 0.27 in the last fifth); boundary-anchored refusal packs into the las
 0.78); last-refusal position median 0.98; cliff post-refusal tail median 4 sentences (vs 212 in the
 forced cells). Token-level: cliff last-refusal → `</think>` median ~70 tokens. **Conclusion: forcing
 longer thinking pads filler *after* the refusal-formation point, so it cannot erode a commitment
-already made.** This explains the wait-run's flat ASR. Write-up: `safety/REFUSAL_LOCUS_FINDINGS.md`.
+already made.** This explains the wait-run's flat ASR. Write-up: `REFUSAL_LOCUS_FINDINGS.md`.
 
 **Method 0 — thinking-clip sweep (independent confirmation).** `run_clip_sweep.py`: generate the
 natural trace once, re-answer from truncations at a frac ladder, heuristic-score. Returns the
@@ -208,7 +208,7 @@ The user renamed the earlier "tiers" to **Methods**, numbered, with per-method v
 - **Method 0** = thinking-clip sweep (the instrument; §6). Done.
 - **Method 1** = time-gated activation steering (§8a). Closed.
 - **Method 2** = suppression-head amplification (§8b). In progress.
-(Method numbers 3–6 were reserved in `safety/METHODS_TRIAGE.md` for self-jailbreak, controls, etc.,
+(Method numbers 3–6 were reserved in `METHODS_TRIAGE.md` for self-jailbreak, controls, etc.,
 but not run.)
 
 Both Methods 1 and 2 share a **frac-gated harness** (built into `run_steer_sweep.py`, reused by
@@ -338,7 +338,7 @@ coordinate with the team).
 - ~~Method 2 v2 (coeff 4) and the amplification sweep~~ → **RUN AND NULL.** Executed on the hub as the
   formation-screened drift-harm experiment at coeff 4/8/16, n=120 each: no harm above the paired
   unsteered control at any dose; higher doses degrade coherence (unscorable 0 → 12 → 78/120) rather
-  than escalate harm. See `safety/drift/DRIFT_HARM_RESULT.md`.
+  than escalate harm. See `DRIFT_HARM_RESULT.md`.
 - **Still genuinely open:** `arm_b` re-run behind the formation screen (highest value — it owns the only
   headline harm rate and its mechanism is unresolved); the preamble + natural-gen control; n=200 to
   state the null at p=0.05 rather than p≈0.10.
@@ -371,7 +371,7 @@ report: **the study has not yet measured its dependent variable.** Harm, in-CoT 
   is prompt-attack harm without formation and must be relabeled as such.**
 - **The pool was never screened for in-CoT formation**, and every cell is n=12–31 (rule of three:
   n=12 → 95% upper bound 22%), so **no null in the program is reportable**.
-- **Doc items — ALL NOW RESOLVED (2026-08-13), see `safety/VALIDITY_AUDIT.md`:**
+- **Doc items — ALL NOW RESOLVED (2026-08-13), see `VALIDITY_AUDIT.md`:**
   - *Pre-registration substrate:* **no conflict.** `safety/run_config.py` on `origin/safety` names
     "Anchor: DeepSeek-R1-Distill-Qwen-14B **/ Qwen3-14B** (bump transformers>=4.51 for Qwen3)" — Qwen3-14B
     is a sanctioned anchor and this track took exactly the prescribed step. Residual (now documented):
@@ -471,16 +471,16 @@ drift-into-harm hypothesis is rejected across the dose range.** (Operational not
   `clip_campaign`, `steer_campaign`, `suphead_campaign`, plus `*_14b` local entrypoints.
 
 **Findings docs (safe to read, no harmful text):**
-- **`safety/VALIDITY_AUDIT.md` — READ FIRST.** Disposition of all 18 critique points with evidence;
+- **`VALIDITY_AUDIT.md` — READ FIRST.** Disposition of all 18 critique points with evidence;
   says exactly what is reportable and what is not.
-- **`safety/drift/DRIFT_HARM_RESULT.md`** — the powered, formation-screened **null** (the DV run).
-- `safety/drift/FINDINGS.md` — the stakeholder Task-1/Task-2 write-up. **Carries a correction banner:
+- **`DRIFT_HARM_RESULT.md`** — the powered, formation-screened **null** (the DV run).
+- `FINDINGS.md` — the stakeholder Task-1/Task-2 write-up. **Carries a correction banner:
   its original "drift is real ~7%" headline is WITHDRAWN**; the rates are elicitation, not drift.
-- `safety/REFUSAL_LOCUS_FINDINGS.md` — the refusal-locus analysis + clip-sweep cross-scale, with a
+- `REFUSAL_LOCUS_FINDINGS.md` — the refusal-locus analysis + clip-sweep cross-scale, with a
   2026-08-13 update recording that its recommended instrument was run and returned null.
-- `safety/METHODS_TRIAGE.md` — the method plan and standing rules (**`early_refuse` retired as a gate**;
+- `METHODS_TRIAGE.md` — the method plan and standing rules (**`early_refuse` retired as a gate**;
   citations audited).
-- `.claude/CLAUDE.md` and the memory files mirror the running experiment log.
+- `CLAUDE.md` and the memory files mirror the running experiment log.
 
 **Result files (`do_not_track/`, git-ignored — read ONLY the safe kinds):**
 - Safe: `*_rejudge/rejudge_verdicts.json` (labels only), the printed sweep/formation tables (in logs).

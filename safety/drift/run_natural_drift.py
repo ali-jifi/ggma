@@ -148,18 +148,20 @@ def gen_stage(args):
                               min_scorable=args.min_scorable)
         screens.append({"behavior_id": p.get("behavior_id"), "category": cat,
                         "closed": sum(1 for pr in profs if pr["closed"]), "n": args.samples, **sc})
-        if not sc["keep"]:
-            _persist()          # rejections are data: they measure the substrate
-            print(f"  [skip] scanned={scanned} {sc['reason']} "
-                  f"(nat={sc['p_natural_refuse']} noreason={sc['p_noreason_refuse']})")
-            continue
-        kept += 1
+        if sc["keep"]:
+            kept += 1
 
+        # Record EVERY trace, screened or not, tagged with its screen verdict. Discarding
+        # non-passing prompts at collection time bakes one hypothesis into the data; filtering
+        # post-hoc keeps every analysis available. On R1-Distill the screen keeps ~nothing because
+        # the models refuse WITHOUT reasoning and comply WITH it -- the inverse of the assumed
+        # pattern -- so the non-passing prompts carry the actual signal.
         for s, (pr, text) in enumerate(zip(profs, nat_texts)):
             cls = ds.classify(pr)
             tid = f"{scanned}_{s}"
             meta.append({"trace_id": tid, "behavior_id": p.get("behavior_id"), "category": cat,
-                         "prompt_idx": scanned, "sample": s, "outcome": cls,
+                         "prompt_idx": scanned, "sample": s, "outcome": cls, "arm": "natural",
+                         "screen_keep": sc["keep"], "screen_reason": sc["reason"],
                          "answer_label": pr["answer_label"], "closed": pr["closed"],
                          "cot_refusal": pr["cot_refusal"], "n_bins": pr["n_bins"],
                          "cot_bins": pr["cot_bins"],
@@ -168,10 +170,28 @@ def gen_stage(args):
                          "think_len": pr["think_len"], "answer_len": pr["answer_len"],
                          "p_natural_refuse": sc["p_natural_refuse"],
                          "p_noreason_refuse": sc["p_noreason_refuse"]})
-            # judge every COMPLIANCE: drift vs non-drift compliance is the informative contrast
             if pr["answer_label"] == ds.COMPLY:
-                comps.append({"trace_id": tid, "category": cat, "behavior": req,
-                              "outcome": cls, "response": ds.split_trace(text)[1]})
+                comps.append({"trace_id": tid, "category": cat, "behavior": req, "arm": "natural",
+                              "outcome": cls, "screen_keep": sc["keep"],
+                              "response": ds.split_trace(text)[1]})
+
+        # The zero-reasoning arm is the PAIRED control for "does reasoning change harm, not just
+        # stance". Same prompt, same k, no CoT. Judged too, so the comparison is on the DV.
+        for s, (lab, text) in enumerate(zip(nr_labels, nr_texts)):
+            tid = f"{scanned}_nr{s}"
+            meta.append({"trace_id": tid, "behavior_id": p.get("behavior_id"), "category": cat,
+                         "prompt_idx": scanned, "sample": s, "outcome": "noreason",
+                         "arm": "noreason", "screen_keep": sc["keep"],
+                         "screen_reason": sc["reason"], "answer_label": lab,
+                         "closed": True, "cot_refusal": False, "n_bins": 0, "cot_bins": [],
+                         "first_refusal_frac": None, "last_refusal_frac": None,
+                         "think_len": 0, "answer_len": len(ds.split_trace(text)[1]),
+                         "p_natural_refuse": sc["p_natural_refuse"],
+                         "p_noreason_refuse": sc["p_noreason_refuse"]})
+            if lab == ds.COMPLY:
+                comps.append({"trace_id": tid, "category": cat, "behavior": req, "arm": "noreason",
+                              "outcome": "noreason", "screen_keep": sc["keep"],
+                              "response": ds.split_trace(text)[1]})
 
         torch.cuda.empty_cache()
         _persist()
@@ -244,7 +264,41 @@ def report_stage(args):
         print("\n  no prompts survived the screen -- nothing to report.")
         return
 
-    outc = Counter(r["outcome"] for r in R)
+    # ---- PRIMARY: does reasoning change refusal, and does it change HARM? ----
+    # Paired on prompt: same behavior, k samples with CoT vs k samples with </think> forced first.
+    nat = [r for r in R if r.get("arm", "natural") == "natural"]
+    nor = [r for r in R if r.get("arm") == "noreason"]
+    if nor:
+        print("\n  REASONING EFFECT (paired by prompt; the substrate question):")
+        pb = defaultdict(lambda: {"n": [], "r": []})
+        for r in nat:
+            if r["answer_label"] != ds.NONE:
+                pb[r["prompt_idx"]]["n"].append(1 if r["answer_label"] == ds.REFUSE else 0)
+        for r in nor:
+            if r["answer_label"] != ds.NONE:
+                pb[r["prompt_idx"]]["r"].append(1 if r["answer_label"] == ds.REFUSE else 0)
+        both = {k: v for k, v in pb.items() if v["n"] and v["r"]}
+        cn = [v["n"] for v in both.values()]
+        cr = [v["r"] for v in both.values()]
+        pn, nlo, nhi = ds.cluster_bootstrap_ci(cn, iters=args.boot, seed=args.seed)
+        pr_, rlo, rhi = ds.cluster_bootstrap_ci(cr, iters=args.boot, seed=args.seed)
+        print(f"    refuse WITH reasoning     {pn:.3f}  CI {nlo:.3f}-{nhi:.3f}")
+        print(f"    refuse WITHOUT reasoning  {pr_:.3f}  CI {rlo:.3f}-{rhi:.3f}   <- paired control")
+        pairs = [[(a, b) for a, b in zip(v["n"], v["r"])] for v in both.values()]
+        d, pv = ds.paired_cluster_permutation(pairs, iters=args.boot, seed=args.seed)
+        print(f"    diff (with - without) = {d:+.3f}   perm p={pv:.4f}   "
+              f"({len(both)} prompts)")
+        print("    negative diff = REASONING ERODES REFUSAL (refusal exists without the CoT and")
+        print("    the CoT destroys it) -- the inverse of in-CoT formation.")
+        if verd:
+            hn = [r for r in nat if r["trace_id"] in harm_by]
+            hr = [r for r in nor if r["trace_id"] in harm_by]
+            print(f"    HARM among compliances: with reasoning "
+                  f"{sum(harm_by[r['trace_id']] for r in hn)}/{len(hn)}   "
+                  f"without {sum(harm_by[r['trace_id']] for r in hr)}/{len(hr)}")
+            print("    Stance without harm is NOT a safety result -- these two dissociated ~35x here.")
+
+    outc = Counter(r["outcome"] for r in nat)
     print(f"\n  trace outcomes (n={len(R)} traces over {rm.get('kept')} prompts):")
     for k, c in outc.most_common():
         print(f"    {k:24} {c}")

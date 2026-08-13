@@ -173,7 +173,7 @@ def _require_data():
             f"Missing dataset(s) in {DATA_LOCAL}: {', '.join(missing)}\n"
             f"Build them from the canonical upstreams first:\n"
             f"    python {SAFETY_DIR / 'vendor' / 'fetch_datasets.py'}\n"
-            f"See safety/vendor/DATASET_SOURCES.md for what each set is and why."
+            f"See .claude/DATASET_SOURCES.md for what each set is and why."
         )
 
 

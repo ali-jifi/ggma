@@ -42,7 +42,7 @@ its natural trace refuses **and** it does *not* refuse with zero reasoning (`</t
 three places so it cannot silently return: a deprecation block in `drift_profile`
 ([run_drift.py](safety/drift/run_drift.py)), an `[INVALID AS A GATE]` banner printed above **both**
 summary tables that emit the column, and a retirement note in the standing rules of
-[METHODS_TRIAGE.md](safety/METHODS_TRIAGE.md). `arm_b`'s "0/28 `early_refuse`" is now recorded as a
+[METHODS_TRIAGE.md](METHODS_TRIAGE.md). `arm_b`'s "0/28 `early_refuse`" is now recorded as a
 measurement of the detector, not of the phenomenon.
 
 **4. `erosion_eff` measures stance, not harm; driving it up may produce no harm at all.**
@@ -58,7 +58,7 @@ the critique's stated risk, now evidence rather than a worry.
 **5. Most harm evidence is 4B, where no CoT refusal forms; the construct is undefined there.**
 **FIXED (by relabelling + re-running).** The 4B is front-loaded — it refuses 71% with *zero* reasoning
 — so 4B "drift" harm (the 37-pile, LOCATE, CONCENTRATE, the ablation, 328 of 388 `arm_b` attempts) is
-dilution or prevention, not erosion. [FINDINGS.md](safety/drift/FINDINGS.md) now carries a top banner
+dilution or prevention, not erosion. [FINDINGS.md](FINDINGS.md) now carries a top banner
 withdrawing the drift claim and relabelling every rate as **prompt-attack harm, formation unscreened**.
 The elicitation result (~7%) survives; the drift *interpretation* does not.
 

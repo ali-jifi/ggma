@@ -92,7 +92,7 @@ moved the harm rate. You cannot wear down a commitment by adding tokens after it
 >
 > The "productive instrument" identified above — intervene in the **late refusal-formation window**
 > rather than forcing longer budgets — was built and run as the formation-screened drift-harm
-> experiment (`safety/drift/DRIFT_HARM_RESULT.md`). Gating a suppression-head intervention to
+> experiment (`DRIFT_HARM_RESULT.md`). Gating a suppression-head intervention to
 > frac ≥ 0.8 on **formation-screened** 14B traces, scoring with HarmBench against a **paired unsteered
 > control**, n=120 per dose: **no harm above control at coeff 4, 8, or 16**; formation ∧ erosion ∧ harm
 > co-occurred on **1/120**. Stance eroded on 22% of formed refusals but converted to harm almost never.

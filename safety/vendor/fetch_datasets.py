@@ -32,7 +32,7 @@ Benign sets measure whether an intervention was SPECIFIC — they touch no ASR n
 are not needed until there is an intervention to be specific about (Phase 3 steering).
 The proposal also holds benign prompts "length- and style-matched to the harmful set",
 so a benign RUN is downstream of a frozen harmful config; datasets.sample() does not yet
-do that matching (see DATASET_SOURCES.md). The DATA built here is a prerequisite, not the
+do that matching (see .claude/DATASET_SOURCES.md). The DATA built here is a prerequisite, not the
 matched run itself.
 
 Every dataset is split into a disjoint extraction half and a held-out test half
@@ -317,7 +317,7 @@ def fetch_sorrybench():
                 f"Do NOT source this from an ungated mirror: the dataset licence forbids\n"
                 f"redistribution, so mirrors are violations, and every known mirror carries the\n"
                 f"superseded 202406 release with an incompatible category numbering.\n"
-                f"Everything else fetches fine without this — see DATASET_SOURCES.md.\n"
+                f"Everything else fetches fine without this — see .claude/DATASET_SOURCES.md.\n"
             )
         raise
 
