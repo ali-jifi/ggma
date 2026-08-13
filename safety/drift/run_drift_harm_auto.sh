@@ -11,16 +11,16 @@
 # Or interactive/reattachable:
 #   tmux new -s dh    # then: bash safety/drift/run_drift_harm_auto.sh   (detach Ctrl-b d, reattach tmux attach -t dh)
 #
-# Override any knob via env, e.g.:  COEFF=8 TARGET_N=200 setsid nohup bash safety/drift/run_drift_harm_auto.sh ...
+# Override any knob via env, e.g.:  COEFFS=8,16 GATES=0.8,0.9 setsid nohup bash safety/drift/run_drift_harm_auto.sh ...
 set -u
 trap '' HUP     # ignore SIGHUP so a terminal timeout/disconnect cannot kill the run or its children
 
-RUN="${RUN:-drift_harm_14b}"
+RUN="${RUN:-drift_harm_sweep}"
 MODEL="${MODEL:-Qwen/Qwen3-14B}"
-TARGET_N="${TARGET_N:-120}"      # >= 100 traces
+COEFFS="${COEFFS:-4,8,16}"       # coeff dose sweep (shares one screen)
+GATES="${GATES:-0.8}"            # gate sweep; set 0.8,0.9 to add the later gate
+MAX_KEPT="${MAX_KEPT:-30}"       # formation-screened prompts, screened once and reused across configs
 SAMPLES="${SAMPLES:-4}"
-GATE="${GATE:-0.8}"              # seed the refusal to this frac, then erode
-COEFF="${COEFF:-4}"             # Method-2 amplification
 LAYER="${LAYER:-20}"
 K="${K:-40}"
 POOL="${POOL:-harmbench_all.json}"
@@ -40,20 +40,20 @@ wait_gpu () {   # blocks until a fully-free GPU appears; echoes its index
   done
 }
 
-echo "=== drift-harm auto | run=$RUN model=$MODEL n=$TARGET_N gate=$GATE coeff=$COEFF k=$K ==="
+echo "=== drift-harm sweep | run=$RUN model=$MODEL coeffs=$COEFFS gates=$GATES max_kept=$MAX_KEPT k=$K ==="
 
 # --- Stage 1: generate (needs the target model) ---
 G=$(wait_gpu); echo "$(date +%H:%M:%S) [gen] GPU $G"
 CUDA_VISIBLE_DEVICES=$G PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
   python safety/drift/run_drift_harm.py --stage gen --model "$MODEL" --run "$RUN" \
-    --pool-file "$POOL" --target-n "$TARGET_N" --samples "$SAMPLES" --gate "$GATE" \
-    --layer "$LAYER" --k "$K" --coeff "$COEFF" > "$LOGDIR/${RUN}_gen.log" 2>&1
+    --pool-file "$POOL" --max-kept "$MAX_KEPT" --samples "$SAMPLES" --gates "$GATES" \
+    --coeffs "$COEFFS" --layer "$LAYER" --k "$K" > "$LOGDIR/${RUN}_gen.log" 2>&1
 [ $? -ne 0 ] && { echo "[gen] FAILED -> $LOGDIR/${RUN}_gen.log"; tail -5 "$LOGDIR/${RUN}_gen.log"; exit 1; }
 echo "$(date +%H:%M:%S) [gen] done -> $LOGDIR/${RUN}_gen.log"
 
 # --- Stage 2: score (needs HarmBench-13B) ---
 G=$(wait_gpu); echo "$(date +%H:%M:%S) [score] GPU $G"
-CUDA_VISIBLE_DEVICES=$G \
+CUDA_VISIBLE_DEVICES=$G PYTHONPATH=safety/vendor \
   python safety/drift/run_drift_harm.py --stage score --run "$RUN" \
     > "$LOGDIR/${RUN}_score.log" 2>&1
 [ $? -ne 0 ] && { echo "[score] FAILED -> $LOGDIR/${RUN}_score.log"; tail -5 "$LOGDIR/${RUN}_score.log"; exit 1; }

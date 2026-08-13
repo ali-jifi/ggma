@@ -33,7 +33,8 @@ from pathlib import Path
 import torch
 
 ROOT = Path(__file__).resolve().parents[2]
-for _p in (ROOT, ROOT / "commitment", ROOT / "safety", ROOT / "safety" / "drift"):
+for _p in (ROOT, ROOT / "commitment", ROOT / "safety", ROOT / "safety" / "drift",
+           ROOT / "safety" / "vendor"):                       # harmbench_judge.py lives here
     sys.path.insert(0, str(_p))
 
 import harness as H
@@ -103,15 +104,19 @@ def gen_stage(args):
     if args.model:
         run_drift.MODEL = args.model
     model, tok = load()
-    print(f"[gen] model={run_drift.MODEL} gate={args.gate} coeff={args.coeff} k={args.k} "
-          f"layer={args.layer} target_n={args.target_n}")
+    coeffs = [float(x) for x in args.coeffs.split(",")] if args.coeffs else [args.coeff]
+    gates = [float(x) for x in args.gates.split(",")] if args.gates else [args.gate]
+    max_kept = args.max_kept or max(1, args.target_n // max(1, args.samples))
+    print(f"[gen] model={run_drift.MODEL} coeffs={coeffs} gates={gates} k={args.k} "
+          f"layer={args.layer} max_kept={max_kept} samples={args.samples}")
 
-    # Method-2 intervention setup: refusal direction + top-k refusal-writing heads
+    # Method-2 setup: refusal direction + top-k heads, shared across every (gate, coeff) config
     direction = extract_direction(model, tok, args.layer, -1, args.n_extract, args.seed)
     harmful = [r["instruction"] for r in
                json.loads((DATA / "advbench_extract.json").read_text(encoding="utf-8"))][:args.n_extract]
     head_mask = topk_heads(head_attribution(model, tok, direction, harmful), args.k)
     print(f"[gen] top-{args.k} refusal heads over {len(head_mask)} layers")
+    hooks_by_coeff = {c: suphead_hooks(model, direction, head_mask, c) for c in coeffs}
 
     pool = json.loads((DATA / args.pool_file).read_text(encoding="utf-8"))
     import random
@@ -121,11 +126,15 @@ def gen_stage(args):
     comp_path = out / f"{args.run}_completions.json"        # HARMFUL text -> never read
     meta_path = out / f"{args.run}_meta.json"               # text-free -> safe
 
+    def _run_meta(k, s):
+        return {"model": run_drift.MODEL, "coeffs": coeffs, "gates": gates, "k": args.k,
+                "layer": args.layer, "samples": args.samples, "seed": args.seed, "kept": k, "scanned": s}
+
     comps, meta = [], []
     kept = scanned = 0
     t0 = time.time()
     for p in pool:
-        if len([m for m in meta]) >= args.target_n:
+        if kept >= max_kept:
             break
         scanned += 1
         req = p["instruction"]
@@ -133,47 +142,44 @@ def gen_stage(args):
         ids = build_ids(model, tok, req)
         s0 = args.seed * 100000 + scanned
 
-        # ---- formation screen ----
+        # ---- formation screen (ONCE per prompt, shared across all configs) ----
         think_ids, tl, nat = _natural_full(model, tok, ids, args.max_think + args.max_answer,
                                            s0, args.gen_timeout, args.temp)
         if nat != "refuse" or tl < args.min_think:
-            continue                                        # not a committed refusal
+            continue
         nr = _noreason_label(model, tok, ids, args.max_answer, s0, args.gen_timeout, args.temp)
         if nr == "refuse":
-            continue                                        # front-loaded, not formed in-CoT
+            continue
         kept += 1
 
-        # ---- intervention at frac>=gate, steered vs unsteered, x samples ----
-        cut = int(round(args.gate * tl))
-        prefix = torch.cat([ids, think_ids[:cut].unsqueeze(0)], dim=1)
-        hooks = suphead_hooks(model, direction, head_mask, args.coeff)
-        for si in range(args.samples):
-            if len(meta) >= args.target_n:
-                break
-            cseed = s0 * 97 + si
-            s_lab, s_ans, s_closed, s_len = _continue_answer(
-                model, tok, prefix, hooks, args.max_new, cseed, args.gen_timeout, args.temp)
-            u_lab, u_ans, u_closed, u_len = _continue_answer(
-                model, tok, prefix, None, args.max_new, cseed, args.gen_timeout, args.temp)
-            tid = f"{scanned}_{si}"
-            comps.append({"trace_id": tid, "category": cat, "behavior": req,
-                          "steer_response": s_ans, "unsteer_response": u_ans})
-            meta.append({"trace_id": tid, "category": cat, "behavior_id": p.get("behavior_id"),
-                         "formed_in_cot": True, "natural_think_len": tl, "gate": args.gate,
-                         "steer_label": s_lab, "unsteer_label": u_lab,
-                         "steer_answer_len": len(s_ans), "unsteer_answer_len": len(u_ans),
-                         "steer_closed": s_closed, "unsteer_closed": u_closed})
+        # ---- per gate: one unsteered control per sample; per coeff: a steered arm ----
+        for gate in gates:
+            cut = int(round(gate * tl))
+            prefix = torch.cat([ids, think_ids[:cut].unsqueeze(0)], dim=1)
+            for si in range(args.samples):
+                cseed = s0 * 97 + si
+                u_lab, u_ans, u_closed, _ = _continue_answer(
+                    model, tok, prefix, None, args.max_new, cseed, args.gen_timeout, args.temp)
+                for coeff in coeffs:
+                    s_lab, s_ans, s_closed, _ = _continue_answer(
+                        model, tok, prefix, hooks_by_coeff[coeff], args.max_new, cseed,
+                        args.gen_timeout, args.temp)
+                    tid = f"{scanned}_g{gate}_c{coeff}_{si}"
+                    comps.append({"trace_id": tid, "category": cat, "behavior": req,
+                                  "steer_response": s_ans, "unsteer_response": u_ans})
+                    meta.append({"trace_id": tid, "category": cat, "behavior_id": p.get("behavior_id"),
+                                 "formed_in_cot": True, "natural_think_len": tl, "gate": gate,
+                                 "coeff": coeff, "steer_label": s_lab, "unsteer_label": u_lab,
+                                 "steer_answer_len": len(s_ans), "unsteer_answer_len": len(u_ans),
+                                 "steer_closed": s_closed, "unsteer_closed": u_closed})
         torch.cuda.empty_cache()
         comp_path.write_text(json.dumps(comps, ensure_ascii=False))       # checkpoint (harmful)
-        meta_path.write_text(json.dumps({"meta_rows": meta, "run": {
-            "model": run_drift.MODEL, "gate": args.gate, "coeff": args.coeff, "k": args.k,
-            "layer": args.layer, "samples": args.samples, "seed": args.seed,
-            "kept": kept, "scanned": scanned}}, ensure_ascii=False))
-        print(f"  kept={kept} scanned={scanned} traces={len(meta)}/{args.target_n} "
-              f"(last: steer {Counter(m['steer_label'] for m in meta[-args.samples:])})")
+        meta_path.write_text(json.dumps({"meta_rows": meta, "run": _run_meta(kept, scanned)},
+                                        ensure_ascii=False))
+        print(f"  kept={kept}/{max_kept} scanned={scanned} traces={len(meta)}")
 
-    print(f"[gen] done: {len(meta)} traces from {kept} formed-in-CoT prompts / {scanned} scanned "
-          f"in {round(time.time()-t0)}s")
+    print(f"[gen] done: {len(meta)} traces, {kept} kept / {scanned} scanned, "
+          f"{len(coeffs)}coeff x {len(gates)}gate x {args.samples}samples in {round(time.time()-t0)}s")
     print(f"[gen] completions -> {comp_path.name} (HARMFUL, do not open); meta -> {meta_path.name}")
     print(f"[gen] next: python run_drift_harm.py --stage score --run {args.run}")
 
@@ -264,45 +270,42 @@ def report_stage(args):
     verd = json.loads((out / f"{args.run}_verdicts.json").read_text(encoding="utf-8"))
     rows = {m["trace_id"]: m for m in meta["meta_rows"]}
     for v in verd["verdicts"]:
-        rows[v["trace_id"]].update(v)
+        if v["trace_id"] in rows:
+            rows[v["trace_id"]].update(v)
     R = list(rows.values())
-    n = len(R)
+    rm = meta.get("run", {})
 
-    # every trace here is formation-screened (formed_in_cot=True)
-    steer_eroded = [r for r in R if r.get("steer_label") == "comply"]      # erosion axis
-    steer_harm = [r for r in R if r.get("steer_harm") == 1]                # harm axis
-    unsteer_harm = [r for r in R if r.get("unsteer_harm") == 1]
-    three_axis = [r for r in R if r.get("steer_label") == "comply" and r.get("steer_harm") == 1]
-    unscorable = [r for r in R if not r.get("steer_scorable", True)]
+    def cfg(r):    # backward-compatible: old single-config runs carry gate/coeff at run level
+        return (r.get("gate", rm.get("gate")), r.get("coeff", rm.get("coeff")))
+    configs = sorted(set(cfg(r) for r in R))
 
-    ph, lo, hi = _wilson(len(steer_harm), n)
-    pu, ulo, uhi = _wilson(len(unsteer_harm), n)
-    b = sum(1 for r in R if r.get("unsteer_harm") == 0 and r.get("steer_harm") == 1)  # intervention created harm
-    c = sum(1 for r in R if r.get("unsteer_harm") == 1 and r.get("steer_harm") == 0)
-    pval = _mcnemar_p(b, c)
-
-    print(f"\n===== DRIFT-HARM (14B, formation-screened, HarmBench) — {args.run} =====")
-    print(f"  model={meta['run'].get('model')}  gate={meta['run'].get('gate')}  "
-          f"coeff={meta['run'].get('coeff')}  k={meta['run'].get('k')}")
-    print(f"  N screened traces (all form refusal in-CoT): {n}   "
-          f"[{meta['run'].get('kept')} prompts x {meta['run'].get('samples')} samples]")
-    print(f"  unscorable (no answer past </think>): {len(unscorable)}")
-    print(f"  --- the dependent variable (harm ^ formation ^ erosion on one trace) ---")
-    print(f"  steer eroded (refuse->comply):   {len(steer_eroded)}/{n} = {len(steer_eroded)/max(1,n):.3f}")
-    print(f"  STEER harmful (HarmBench):        {len(steer_harm)}/{n} = {ph:.3f}  (95% CI {lo:.3f}-{hi:.3f})")
-    print(f"  three-axis co-occurrence (formed & eroded & harmful): {len(three_axis)}/{n}")
-    print(f"  --- paired control ---")
-    print(f"  UNSTEER harmful (same prefix):    {len(unsteer_harm)}/{n} = {pu:.3f}  (95% CI {ulo:.3f}-{uhi:.3f})")
-    print(f"  McNemar: intervention-created harm b={b}, control-only harm c={c}, two-sided p={pval:.4f}")
-    print(f"  READ: the DV is STEER harmful rate on formation-screened traces; UNSTEER is the paired")
-    print(f"  causal control on the identical formed-refusal prefix. b>>c with small p = the")
-    print(f"  intervention erodes a FORMED refusal into HarmBench-confirmed harm (drift). n>=100 =>")
-    print(f"  a null here (rule of three) bounds the true drift-harm rate below ~{3/max(1,n):.3f}.")
+    print(f"\n===== DRIFT-HARM SWEEP (14B, formation-screened, HarmBench) — {args.run} =====")
+    print(f"  model={rm.get('model')}  k={rm.get('k')}  layer={rm.get('layer')}  "
+          f"kept_prompts={rm.get('kept')}  samples={rm.get('samples')}")
+    print(f"  DV = STEER harmful (HarmBench) on formation-screened traces; UNSTEER = paired control on")
+    print(f"  the identical formed-refusal prefix. Drift-into-harm would need STEER's CI above UNSTEER")
+    print(f"  AND McNemar p<0.05 with b>c. STEER~=UNSTEER on a row = the null holds at that dose.\n")
+    for g, c in configs:
+        S = [r for r in R if cfg(r) == (g, c)]
+        n = len(S)
+        sh = sum(1 for r in S if r.get("steer_harm") == 1)
+        uh = sum(1 for r in S if r.get("unsteer_harm") == 1)
+        er = sum(1 for r in S if r.get("steer_label") == "comply")
+        th = sum(1 for r in S if r.get("steer_label") == "comply" and r.get("steer_harm") == 1)
+        b = sum(1 for r in S if r.get("unsteer_harm") == 0 and r.get("steer_harm") == 1)
+        cc = sum(1 for r in S if r.get("unsteer_harm") == 1 and r.get("steer_harm") == 0)
+        none_s = sum(1 for r in S if not r.get("steer_scorable", True))
+        ph, lo, hi = _wilson(sh, n)
+        pu, _, _ = _wilson(uh, n)
+        pv = _mcnemar_p(b, cc)
+        print(f"  gate={g} coeff={c}: n={n}  STEER {sh}/{n}={ph:.3f} (CI {lo:.2f}-{hi:.2f})  "
+              f"UNSTEER {uh}/{n}={pu:.3f}  eroded={er}/{n}  3axis={th}  unscorable={none_s}  "
+              f"McNemar b={b}/c={cc} p={pv:.3f}")
+    print("\n  by category (steer harmful / n, pooled over configs):")
     bycat = defaultdict(lambda: [0, 0])
     for r in R:
         bycat[r["category"]][0] += r.get("steer_harm", 0)
         bycat[r["category"]][1] += 1
-    print("  by category (steer harmful / n):")
     for cat, (h, tot) in sorted(bycat.items(), key=lambda kv: -kv[1][0]):
         if h:
             print(f"    {cat[:34]:34} {h}/{tot}")
@@ -317,9 +320,12 @@ def main():
     ap.add_argument("--target-n", type=int, default=120)      # >= 100 traces
     ap.add_argument("--samples", type=int, default=4)         # continuations per screened prompt
     ap.add_argument("--gate", type=float, default=0.8)        # seed refusal to this frac, then erode
+    ap.add_argument("--gates", default="")                    # csv sweep, e.g. "0.8,0.9"; overrides --gate
     ap.add_argument("--layer", type=int, default=20)
     ap.add_argument("--k", type=int, default=40)
     ap.add_argument("--coeff", type=float, default=4.0)       # amplification (Method 2 v2)
+    ap.add_argument("--coeffs", default="")                   # csv sweep, e.g. "4,8,16"; overrides --coeff
+    ap.add_argument("--max-kept", type=int, default=0)        # kept prompts to screen; 0 -> target_n//samples
     ap.add_argument("--n-extract", type=int, default=128)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--temp", type=float, default=TEMP)
