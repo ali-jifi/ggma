@@ -92,15 +92,40 @@ def head_attribution(model, tok, direction, prompts, batch=8):
     return (acc / max(1, cnt)).cpu()                                   # (n_layers, H)
 
 
-def topk_heads(score, k):
-    """Top-k most refusal-writing heads (largest positive c_h.d). Returns {layer: [head,...]}."""
-    H = score.shape[1]
-    idx = torch.topk(score.flatten(), min(k, score.numel())).indices
+def topk_heads(score, k, per_layer_z=False):
+    """Top-k most refusal-writing heads (largest positive c_h.d). Returns {layer: [head,...]}.
+
+    per_layer_z=True z-scores within each layer before ranking. This matters for interpretation:
+    raw c_h.d magnitudes scale with the residual-stream norm, which GROWS WITH DEPTH, so a global
+    top-k is biased toward late layers by construction. Reading "the refusal heads are all in
+    L37-39" off an unnormalized ranking can therefore be an artifact of that scaling rather than a
+    fact about where refusal is written. Normalizing per layer removes the depth bias; compare the
+    two rankings (see depth_concentration) before treating the localization as a finding.
+    """
+    s = score.detach().float().clone()
+    if per_layer_z:
+        mu = s.mean(dim=1, keepdim=True)
+        sd = s.std(dim=1, keepdim=True).clamp_min(1e-8)
+        s = (s - mu) / sd
+    H = s.shape[1]
+    idx = torch.topk(s.flatten(), min(k, s.numel())).indices
     mask = defaultdict(list)
     for i in idx.tolist():
         li, h = divmod(i, H)
         mask[li].append(h)
     return dict(mask)
+
+
+def depth_concentration(score, head_mask):
+    """(frac_selected_in_top_quartile_of_layers, mean_layer_frac). ~0.25 / ~0.5 = depth-neutral;
+    values near 1.0 mean the selection tracks depth and may be a norm-scaling artifact."""
+    n_layers = score.shape[0]
+    sel = [li for li, hs in head_mask.items() for _ in hs]
+    if not sel:
+        return 0.0, 0.0
+    cut = 0.75 * (n_layers - 1)
+    return (sum(1 for li in sel if li >= cut) / len(sel),
+            sum(li / max(1, n_layers - 1) for li in sel) / len(sel))
 
 
 def suphead_hooks(model, direction, head_mask, coeff=1.0):

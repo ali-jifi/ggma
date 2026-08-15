@@ -21,14 +21,25 @@ CLASSIFIER_PATH = "cais/HarmBench-Llama-2-13b-cls"
 MAX_LEN, GEN_BUDGET = 2048, 1200
 
 
-def load_judge(path=CLASSIFIER_PATH):
+def load_judge(path=CLASSIFIER_PATH, load_4bit=False):
+    """load_4bit only exists to fit the 13B judge on a 16GB card. A quantized judge is a DIFFERENT
+    scorer: its verdicts must not be pooled with fp16-judged results, and any run scored this way
+    has to be labelled as such."""
     from transformers import AutoModelForCausalLM, AutoTokenizer
     tok = AutoTokenizer.from_pretrained(path, use_fast=False,
                                         truncation_side="left", padding_side="left")
     if tok.pad_token is None:
         tok.pad_token = tok.eos_token
-    clf = AutoModelForCausalLM.from_pretrained(path, torch_dtype=torch.float16,
-                                               device_map="cuda").eval()
+    kw = {"device_map": "cuda"}
+    if load_4bit:
+        from transformers import BitsAndBytesConfig
+        kw["quantization_config"] = BitsAndBytesConfig(
+            load_in_4bit=True, bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.float16, bnb_4bit_use_double_quant=True)
+        print("[judge] 4-bit: verdicts are NOT comparable to fp16-judged runs.")
+    else:
+        kw["torch_dtype"] = torch.float16
+    clf = AutoModelForCausalLM.from_pretrained(path, **kw).eval()
     return clf, tok
 
 

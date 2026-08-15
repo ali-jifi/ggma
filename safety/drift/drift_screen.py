@@ -240,6 +240,45 @@ def paired_cluster_permutation(clusters, iters=10000, seed=0):
     return obs, (hits + 1) / (iters + 1)
 
 
+def cluster_trend_test(clusters, iters=10000, seed=0):
+    """Does y rise with x, testing WITHIN prompt?
+
+    `clusters` = [[(x, y), ...] per prompt] -- x = reasoning fraction, y = 0/1 outcome.
+    Statistic is the pooled within-cluster covariance sum, so between-prompt differences in
+    difficulty cannot create a trend. Under H0 the dose label is exchangeable within a prompt, so
+    each permutation shuffles x inside each cluster and never across.
+
+    A monotone dose-response is the answer to "is the zero-reasoning arm just off-distribution?" --
+    a two-point gap can be an artifact of that one odd condition, a graded curve cannot.
+    Returns (statistic, p_two_sided).
+    """
+    def stat(cs):
+        tot = 0.0
+        for c in cs:
+            if len(c) < 2:
+                continue
+            mx = sum(p[0] for p in c) / len(c)
+            my = sum(p[1] for p in c) / len(c)
+            tot += sum((p[0] - mx) * (p[1] - my) for p in c)
+        return tot
+
+    obs = stat(clusters)
+    usable = [c for c in clusters if len(c) >= 2]
+    if not usable:
+        return obs, 1.0
+    rng = random.Random(seed)
+    hits = 0
+    for _ in range(iters):
+        perm = []
+        for c in usable:
+            xs = [p[0] for p in c]
+            rng.shuffle(xs)
+            perm.append([(x, p[1]) for x, p in zip(xs, c)])
+        if abs(stat(perm)) >= abs(obs) - 1e-12:
+            hits += 1
+    return obs, (hits + 1) / (iters + 1)
+
+
 def mcnemar_p(b, c):
     """Exact McNemar. Observation-level: valid only for independent pairs."""
     import math

@@ -164,6 +164,38 @@ def test_permutation_is_conservative_vs_mcnemar_under_clustering():
     assert p_mcn < 0.05 < p_perm
 
 
+def test_trend_detects_monotone_dose_response():
+    """Harm rising with reasoning fraction, same shape in every prompt."""
+    clusters = [[(f, 1 if f >= 0.75 else 0) for f in (0.0, 0.25, 0.5, 0.75, 1.0)]
+                for _ in range(20)]
+    s, p = ds.cluster_trend_test(clusters, iters=2000, seed=1)
+    assert s > 0 and p < 0.05
+
+
+def test_trend_null_when_flat():
+    clusters = [[(f, 1) for f in (0.0, 0.25, 0.5, 0.75, 1.0)] for _ in range(20)]
+    s, p = ds.cluster_trend_test(clusters, iters=2000, seed=1)
+    assert abs(s) < 1e-9 and p > 0.5
+
+
+def test_trend_ignores_between_prompt_differences():
+    """Prompts differing wildly in base rate, but FLAT within each, must not read as a trend --
+    that is the confound a naive pooled correlation would fall for."""
+    clusters = []
+    for i in range(20):
+        y = 1 if i % 2 else 0
+        clusters.append([(f, y) for f in (0.0, 0.25, 0.5, 0.75, 1.0)])
+    s, p = ds.cluster_trend_test(clusters, iters=2000, seed=2)
+    assert abs(s) < 1e-9 and p > 0.5
+
+
+def test_trend_detects_negative_direction():
+    clusters = [[(f, 1 if f <= 0.25 else 0) for f in (0.0, 0.25, 0.5, 0.75, 1.0)]
+                for _ in range(20)]
+    s, p = ds.cluster_trend_test(clusters, iters=2000, seed=3)
+    assert s < 0 and p < 0.05
+
+
 def test_rule_of_three():
     assert abs(ds.rule_of_three_upper(120) - 0.025) < 1e-9
     assert abs(ds.rule_of_three_upper(12) - 0.25) < 1e-9
@@ -182,6 +214,62 @@ def _run_all():
             print(f"  FAIL  {name}: {e}")
     print(f"\n{len(fns) - failed}/{len(fns)} passed")
     return failed
+
+
+
+
+# ----------------------------- refusal probe (curve shape) -----------------------------
+import refusal_probe as rp
+
+
+def test_curve_preemption_never_forms():
+    """Intention stays low throughout -> no commitment existed to erode."""
+    s = rp.summarize_curve([0.1] * 50)
+    assert rp.classify_curve(s, form_thresh=1.0, drop_thresh=0.5) == rp.PREEMPTION
+
+
+def test_curve_cliff_forms_then_collapses():
+    """Rises to 2.0 mid-trace, ends near zero -> the Refusal Cliff signature."""
+    s = rp.summarize_curve([0.1] * 10 + [2.0] * 20 + [0.05] * 20)
+    assert s["peak"] == 2.0 and s["drop"] > 1.5
+    assert rp.classify_curve(s, form_thresh=1.0, drop_thresh=0.5) == rp.CLIFF
+
+
+def test_curve_held_forms_and_stays():
+    s = rp.summarize_curve([0.1] * 10 + [2.0] * 40)
+    assert rp.classify_curve(s, form_thresh=1.0, drop_thresh=0.5) == rp.HELD
+
+
+def test_curve_records_peak_position():
+    early = rp.summarize_curve([3.0] + [0.1] * 99)
+    late = rp.summarize_curve([0.1] * 99 + [3.0])
+    assert early["peak_frac"] < 0.05 and late["peak_frac"] > 0.95
+
+
+def test_curve_empty_is_not_a_mechanism_claim():
+    assert rp.classify_curve(rp.summarize_curve([]), 1.0, 0.5) == "empty"
+
+
+def test_curve_start_offset_skips_prompt():
+    s = rp.summarize_curve([9.0] * 10 + [0.1] * 10, start=10)
+    assert s["peak"] == 0.1 and s["n"] == 10
+
+
+def test_calibrate_separates_refused_from_benign():
+    refused = [rp.summarize_curve([0.1] * 5 + [2.0] * 20) for _ in range(10)]
+    benign = [rp.summarize_curve([0.1] * 25) for _ in range(10)]
+    c = rp.calibrate(refused, benign)
+    assert c["separation"] > 1.0
+    assert c["form_thresh"] > 0.1
+    # a fresh refusing trace must clear the learned threshold; a benign one must not
+    assert rp.classify_curve(refused[0], c["form_thresh"], max(c["drop_thresh"], 0.5)) == rp.HELD
+    assert rp.classify_curve(benign[0], c["form_thresh"], max(c["drop_thresh"], 0.5)) == rp.PREEMPTION
+
+
+def test_preemption_requires_low_peak_not_absence_of_drop():
+    """A formed-and-held refusal must never be labelled preemption just because it did not fall."""
+    s = rp.summarize_curve([2.0] * 40)
+    assert rp.classify_curve(s, form_thresh=1.0, drop_thresh=0.5) == rp.HELD
 
 
 if __name__ == "__main__":
