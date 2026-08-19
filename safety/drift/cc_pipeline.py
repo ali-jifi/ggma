@@ -33,6 +33,10 @@ _ap.add_argument("--min-prefixes", type=int, default=12)
 _ap.add_argument("--max-prompts", type=int, default=90)
 _ap.add_argument("--max-prefixes", type=int, default=20)
 _ap.add_argument("--samples", type=int, default=2)
+_ap.add_argument("--strict-screen", action="store_true",
+                 help="require an independent refusing draw 0 AND a refusing source trace. "
+                      "Without it the screen admits comply-bound prefixes, which is what "
+                      "diluted cc_hub14b.")
 _A = _ap.parse_args()
 
 RUN, MODEL, MIN_PREFIXES = _A.run, _A.model, _A.min_prefixes
@@ -66,10 +70,13 @@ if not _A.bf16:
     COMMON.append("--load-4bit")
 
 say(f"PIPELINE START run={RUN} model={MODEL.split('/')[-1]} "
-    f"{'bf16' if _A.bf16 else 'nf4'}")
+    f"{'bf16' if _A.bf16 else 'nf4'} screen={'strict' if _A.strict_screen else 'permissive'}")
 
-run("calibrate", ["safety/drift/run_pathdrift_probe.py", "--stage", "calibrate", "--run", RUN,
-                  "--layer", "20", "--calib-n", "12", "--max-new", "3000"] + COMMON)
+if (D / f"{RUN}_calib.json").exists():
+    say(f"reusing existing calibration {RUN}_calib.json")
+else:
+    run("calibrate", ["safety/drift/run_pathdrift_probe.py", "--stage", "calibrate", "--run", RUN,
+                      "--layer", "20", "--calib-n", "12", "--max-new", "3000"] + COMMON)
 
 cal = json.loads((D / f"{RUN}_calib.json").read_text(encoding="utf-8"))
 say(f"GATE calib n_refused={cal['n_refused']} separation={cal['separation']:.3f} "
@@ -78,11 +85,13 @@ if cal["n_refused"] < 5 or cal["separation"] <= 0:
     say("ABORT probe does not separate refused from benign; nothing downstream is interpretable")
     sys.exit(1)
 
-run("screen", ["safety/drift/run_commit_continue.py", "--stage", "screen", "--run", RUN,
-               "--calib", RUN, "--max-prompts", str(_A.max_prompts), "--samples", "3",
-               "--per-prompt", "2", "--max-prefixes", str(_A.max_prefixes),
-               "--min-frac", "0.10", "--max-new", "3000",
-               "--resume"] + COMMON)
+_screen = ["safety/drift/run_commit_continue.py", "--stage", "screen", "--run", RUN,
+           "--calib", RUN, "--max-prompts", str(_A.max_prompts), "--samples", "3",
+           "--per-prompt", "2", "--max-prefixes", str(_A.max_prefixes),
+           "--min-frac", "0.10", "--max-new", "3000", "--resume"]
+if _A.strict_screen:
+    _screen += ["--require-refuse", "--screen-draw"]
+run("screen", _screen + COMMON)
 
 sm = json.loads((D / f"{RUN}_screen_meta.json").read_text(encoding="utf-8"))
 pref = json.loads((D / f"{RUN}_prefixes.json").read_text(encoding="utf-8"))

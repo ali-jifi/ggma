@@ -21,16 +21,22 @@ CLASSIFIER_PATH = "cais/HarmBench-Llama-2-13b-cls"
 MAX_LEN, GEN_BUDGET = 2048, 1200
 
 
-def load_judge(path=CLASSIFIER_PATH, load_4bit=False):
+def load_judge(path=CLASSIFIER_PATH, load_4bit=False, device_map="cuda", max_memory=None):
     """load_4bit only exists to fit the 13B judge on a 16GB card. A quantized judge is a DIFFERENT
     scorer: its verdicts must not be pooled with fp16-judged results, and any run scored this way
-    has to be labelled as such."""
+    has to be labelled as such.
+
+    device_map/max_memory only move fp16 weights between devices -- accelerate offloading is the
+    SAME scorer (same dtype, same weights, same clip), so those verdicts DO pool with fp16 results.
+    Use device_map="auto" to fit fp16 on a card too small to hold it."""
     from transformers import AutoModelForCausalLM, AutoTokenizer
     tok = AutoTokenizer.from_pretrained(path, use_fast=False,
                                         truncation_side="left", padding_side="left")
     if tok.pad_token is None:
         tok.pad_token = tok.eos_token
-    kw = {"device_map": "cuda"}
+    kw = {"device_map": device_map}
+    if max_memory:
+        kw["max_memory"] = max_memory
     if load_4bit:
         from transformers import BitsAndBytesConfig
         kw["quantization_config"] = BitsAndBytesConfig(

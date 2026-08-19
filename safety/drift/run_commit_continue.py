@@ -154,6 +154,34 @@ def screen_stage(args):
         scanned += 1
         req = p["instruction"]
         ids0 = build_ids(model, tok, req)
+
+        # Draw 0 is an INDEPENDENT screening generation, never a prefix source. It does two jobs:
+        # it establishes that this prompt is in a refusing state without using the same generation
+        # that supplies the prefix (the circularity in cc_hub14b), and it lets a prompt that does
+        # not refuse cost one generation instead of `samples`.
+        if args.screen_draw:
+            _, txt0 = _gen_ids(model, tok, ids0, args.max_new,
+                               args.seed * 100000 + scanned * 977, args.gen_timeout, args.temp)
+            screen_label = ds.answer_label(txt0)
+            if screen_label != ds.REFUSE:
+                torch.cuda.empty_cache()
+                sm.write_text(json.dumps(
+                    {"scanned": scanned, "n_prefixes": len(prefixes), "stop_reason": stop,
+                     "form_thresh": ft, "min_frac": args.min_frac, "model": run_drift.MODEL,
+                     "layer": args.layer,
+                     "categories": ("ALL" if args.all_categories else PRODUCTIVE),
+                     "screen_draw": bool(args.screen_draw),
+                     "require_refuse": bool(args.require_refuse),
+                     "elapsed_sec": round(time.time() - t_stage)}, ensure_ascii=False),
+                    encoding="utf-8")
+                _persist_cb(args)
+                el = time.time() - t_stage
+                print(f"  screened={scanned}/{args.max_prompts} prefixes={len(prefixes)} "
+                      f"| skip:{screen_label} | {el/max(1,scanned-done):.0f}s/prompt {el/60:.0f}m")
+                continue
+        else:
+            screen_label = None
+
         kept_here = 0
         for s in range(args.samples):
             if kept_here >= args.per_prompt:
@@ -167,6 +195,12 @@ def screen_stage(args):
             t = commit_index(curve, ft, args.min_frac, te)
             if t is None:
                 continue
+            nat_label = ds.answer_label(txt)
+            # A prefix is a COMMITMENT only if the trace it came from actually refused. Threshold
+            # crossing alone is the model CONSIDERING a refusal: on cc_hub14b, comply-bound traces
+            # crossed just as strongly (commit_score 18.37 vs 18.60) and then complied 10/12.
+            if args.require_refuse and nat_label != ds.REFUSE:
+                continue
             summ = rp.summarize_curve(curve)
             prefixes.append({
                 "prefix_id": f"{scanned}_{s}", "prompt_idx": scanned, "sample": s,
@@ -174,7 +208,8 @@ def screen_stage(args):
                 "request": req, "commit_idx": t, "gen_len": int(len(gen)),
                 "think_end_idx": te, "commit_frac": round(t / max(1, len(gen) - 1), 4),
                 "commit_score": round(float(curve[t]), 4), "peak": round(summ["peak"], 4),
-                "peak_frac": summ["peak_frac"], "nat_answer_label": ds.answer_label(txt),
+                "peak_frac": summ["peak_frac"], "nat_answer_label": nat_label,
+                "screen_draw_label": screen_label,
                 "prefix_ids": [int(x) for x in gen[:t + 1]],
             })
             kept_here += 1
@@ -381,6 +416,10 @@ def main():
     ap.add_argument("--boot", type=int, default=10000)
     ap.add_argument("--load-4bit", action="store_true")
     ap.add_argument("--all-categories", action="store_true")
+    ap.add_argument("--require-refuse", action="store_true",
+                    help="keep a prefix only if its source trace actually refused")
+    ap.add_argument("--screen-draw", action="store_true",
+                    help="independent draw 0 must refuse before the prompt yields any prefix")
     ap.add_argument("--resume", action="store_true")
     a = ap.parse_args()
     {"screen": screen_stage, "continue": continue_stage,

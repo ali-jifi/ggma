@@ -27,6 +27,24 @@
 > cognitive-load preamble plus budget forcing elicits ~7% HarmBench-confirmed harm from a
 > baseline-refusing model — a real elicitation result whose *mechanism* is unresolved. The sections
 > below are retained as written on 2026-08-04 for provenance; read them through this correction.
+>
+> ### UPDATE 2026-08-19 — the unresolved mechanism is now resolved
+>
+> Two runs on DeepSeek-R1-Distill-Qwen-14B with a per-token refusal-intention probe settle what the
+> `arm_b` preamble does and whether forcing erodes a formed refusal:
+>
+> 4. **The cognitive-load preamble SUPPRESSES refusal formation** (`pd_modal_load`: formation
+>    0.25 -> 0.07, paired p=0.0153, the only significant effect in the run; harm went *down*, and
+>    0 of 60 traces showed formation-then-collapse). Its mechanism is dilution/prevention, measured
+>    directly rather than inferred. **The withdrawn drift label on the ~7% stays withdrawn.**
+> 5. **A refusal the model actually commits to SURVIVES forcing.** Cutting a natural trace at its
+>    commitment point and resampling forward gave **0/14 harmful** under suppression forcing and
+>    1/14 under Wait, against 0/14 for the unforced control — while refusal *wording* fell
+>    1.000 -> 0.786. Forcing hollows out the stance without reaching harmful content, which is this
+>    document's oldest finding (the 37-pile: 0.70 substring-comply, 0/37 harmful) replicating on a
+>    valid substrate. Power is thin (5 prompts; rule-of-three bound 0.214). See
+>    `safety/drift/COMMITMENT_CONTINUATION_RESULT.md`.
+
 
 ## Question
 
