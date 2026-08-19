@@ -110,7 +110,16 @@ def _probe_scores(model, tok, seq_ids, direction, layer):
     hd = layers[layer].register_forward_hook(hook)
     try:
         with torch.no_grad():
-            model(input_ids=seq_ids)
+            # Only the hook's hidden states are wanted. Left to itself the model materializes
+            # logits for EVERY position (seq x 152k vocab), ~1.2GB at 3k tokens -- irrelevant on an
+            # A100, decisive on a 16GB card. Ask for one position; older transformers used a
+            # different kwarg name, and oldest support neither.
+            for kw in ({"logits_to_keep": 1}, {"num_logits_to_keep": 1}, {}):
+                try:
+                    model(input_ids=seq_ids, **kw)
+                    break
+                except TypeError:
+                    continue
     finally:
         hd.remove()
     return (store["h"] @ dhat).tolist()

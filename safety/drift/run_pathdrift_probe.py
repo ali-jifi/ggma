@@ -127,13 +127,26 @@ def gen_stage(args):
     cal = json.loads((out / f"{args.run}_calib.json").read_text(encoding="utf-8"))
     if cal["n_refused"] < 5 or cal["separation"] <= 0:
         sys.exit("calibration failed; probe is not measuring refusal. Fix that before generating.")
+    arms = [a.strip() for a in args.arms.split(",")] if args.arms else list(pathdrift.ARMS)
+    for a in arms:
+        if a not in pathdrift.ARMS:
+            sys.exit(f"unknown arm {a!r}; expected from {pathdrift.ARMS}")
+    if "none" not in arms:
+        print("[gen] WARNING: no 'none' arm -- the report's paired comparisons need a baseline.")
     model, tok = load_model(args.load_4bit)
     d = _direction(model, tok, args)
     pool = json.loads((DATA / args.pool_file).read_text(encoding="utf-8"))
     random.Random(args.seed).shuffle(pool)
 
     comps, meta = [], []
-    scanned = 0
+    done = 0
+    mf, cf = out / f"{args.run}_meta.json", out / f"{args.run}_completions.json"
+    if getattr(args, "resume", False) and mf.exists():
+        meta = json.loads(mf.read_text(encoding="utf-8"))["meta_rows"]
+        comps = json.loads(cf.read_text(encoding="utf-8")) if cf.exists() else []
+        done = max((m["prompt_idx"] for m in meta), default=0)
+        print(f"[gen] resuming after prompt {done} ({len(meta)} rows, {len(comps)} to judge)")
+    scanned = done
     t0 = time.time()
     stop = "max_prompts"
 
@@ -141,12 +154,15 @@ def gen_stage(args):
         (out / f"{args.run}_completions.json").write_text(json.dumps(comps, ensure_ascii=False))
         (out / f"{args.run}_meta.json").write_text(json.dumps(
             {"meta_rows": meta, "calib": cal,
-             "run": {"model": run_drift.MODEL, "arms": pathdrift.ARMS, "layer": args.layer,
+             "run": {"model": run_drift.MODEL, "arms": arms, "layer": args.layer,
                      "samples": args.samples, "seed": args.seed, "temp": args.temp,
                      "scanned": scanned, "stop_reason": s,
                      "elapsed_sec": round(time.time() - t_stage)}}, ensure_ascii=False))
+        cb = getattr(args, "on_persist", None)
+        if cb:
+            cb()
 
-    for p in pool:
+    for p in pool[done:]:
         if scanned >= args.max_prompts:
             break
         if args.budget_sec and (time.time() - t_stage) > args.budget_sec:
@@ -155,7 +171,7 @@ def gen_stage(args):
             break
         scanned += 1
         req, cat = p["instruction"], p.get("category", "_")
-        for arm in pathdrift.ARMS:
+        for arm in arms:
             ids = build_ids(model, tok, pathdrift.build(req, arm))
             for s in range(args.samples):
                 gen, txt = _gen(model, tok, ids, args.max_new,
@@ -180,7 +196,7 @@ def gen_stage(args):
         _persist()
         el = time.time() - t0
         print(f"  scanned={scanned}/{args.max_prompts} rows={len(meta)} judge={len(comps)} "
-              f"| {el/max(1,scanned):.0f}s/prompt {el/60:.0f}m")
+              f"| {el/max(1,scanned-done):.0f}s/prompt {el/60:.0f}m")
 
     _persist(stop)
     print(f"\n[gen] {len(meta)} rows from {scanned} prompts (stop: {stop})")
@@ -293,6 +309,7 @@ def main():
     ap.add_argument("--layer", type=int, default=20)
     ap.add_argument("--n-extract", type=int, default=128)
     ap.add_argument("--calib-n", type=int, default=20)
+    ap.add_argument("--arms", default="")            # subset, e.g. "none,role"; blank = all
     ap.add_argument("--samples", type=int, default=2)
     ap.add_argument("--max-prompts", type=int, default=20)
     ap.add_argument("--seed", type=int, default=0)

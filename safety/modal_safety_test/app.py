@@ -3,7 +3,7 @@ Modal.com launcher for the safety-side reasoning-model eval (Two Drifts).
 
 DEEP integration: generation + steering run on `harness.py` (repo root, shared
 "one copy, both sides" toolkit) + `safety/steering_primitives.py`. The judge lives
-in `safety/vendor/`; the datasets are NOT committed — build them first with
+in `safety/vendor/`; the datasets are NOT committed -- build them first with
 `python safety/vendor/fetch_datasets.py`. No gemma.
 
 What one `modal run` does:
@@ -95,7 +95,7 @@ MAX_NEW_TOKENS = 2048   # reasoning needs room for the think block + answer (tun
 # changes the vector, not just the model: a direction extracted at layer 14 is a different
 # object from one at layer 20, and the proposal calls for sweeping layers ("sweep layers on
 # held-out data, pick where steering actually reproduces drift; do not assume a layer"). Key
-# on the alias alone and every sweep step silently returns the first direction — you would
+# on the alias alone and every sweep step silently returns the first direction -- you would
 # conclude something about layer 20 that you measured at layer 14, with no error. Distinct
 # params therefore get distinct paths, so old directions stay cached instead of being
 # invalidated.
@@ -164,7 +164,7 @@ REQUIRED_DATA = (SCORED_JSON, HARMFUL_EXTRACT_JSON, BENIGN_EXTRACT_JSON)
 
 
 def _require_data():
-    """The datasets are not committed — they are fetched from their canonical upstreams
+    """The datasets are not committed -- they are fetched from their canonical upstreams
     at pinned commits. Fail here with an instruction rather than deep inside a container
     with a FileNotFoundError."""
     missing = [n for n in REQUIRED_DATA if not (DATA_LOCAL / n).exists()]
@@ -180,7 +180,7 @@ def _require_data():
 # --- helpers ------------------------------------------------------------------
 def _jsonify(obj):
     """Round-trip through JSON so a remote function's return contains only plain
-    primitives. The local orchestrator env is lean (only the modal client — no
+    primitives. The local orchestrator env is lean (only the modal client -- no
     torch/numpy), so returning tensors/np.float64 would fail to deserialize
     locally. The fallback coerces anything exotic."""
     import json as _json
@@ -240,7 +240,7 @@ def scorer_version_of(matcher) -> str:
 @app.function(image=image, timeout=300, retries=0, secrets=[hf_secret], volumes={CACHE_DIR: hf_cache})
 def smoke() -> dict:
     """CPU-only preflight (~$0): the shipped libs import, the splits + judge template
-    are present, and the HF token/Volume work — BEFORE any GPU dollar is spent."""
+    are present, and the HF token/Volume work -- BEFORE any GPU dollar is spent."""
     import glob
     import os
     import sys
@@ -599,7 +599,7 @@ def collect(dataset: str = DATASET_NAME, n: int = 12, budgets: str = "natural",
             max_new_tokens: int = MAX_NEW_TOKENS,
             rollout_max_new_tokens: int = 2048, batch_size: int = 1,
             run_label: str = "1.0b", smoke_one: bool = False) -> dict:
-    """Collect harness Trace rows for the safety side — the function `generate` is not.
+    """Collect harness Trace rows for the safety side -- the function `generate` is not.
 
     `generate` runs generate_natural in a serial loop over one budget and returns raw
     completions. It cannot produce a Task-1.4 row: no budget forcing (so no short/long
@@ -1333,7 +1333,7 @@ def clip_14b(pool: int = 110, fracs: str = "0.0,0.2,0.4,0.6,0.8,0.9,1.0", max_re
              seed: int = 0, temp: float = 0.6, max_think: int = 1200, max_answer: int = 600,
              gen_timeout: int = 300, run_name: str = "clip_14b", model_path: str = "",
              categories: str = ""):
-    """Tier-0 clip sweep on the 14B (Modal L40S) — pins its refusal-formation point. Does its
+    """Tier-0 clip sweep on the 14B (Modal L40S) -- pins its refusal-formation point. Does its
     OWN Phase-1 baseline over `pool` HarmBench prompts to find the model's refused subset
     (capped at max_refused), then clip-sweeps them. Run under `modal run --detach`.
         uv run modal run app.py::clip_14b --pool 110 --max-refused 40 --run-name clip_14b_n40
@@ -1614,3 +1614,363 @@ def suphead_14b(pool: int = 35, fracs: str = "0.0,0.8", max_refused: int = 12, l
         tag = "  <- PREVENTION" if frv == 0.0 else ("  <- EROSION" if frv >= 0.8 else "")
         print(f"{frv:>6} {sref:>10.2f} {uref:>12.2f} {uref - sref:>12.2f} {c['s_none']:>11}{tag}")
     print(f"[done] {len(res['recs'])} traces; saved {out}")
+
+
+# =============================================================================
+# PATH DRIFT x REFUSAL PROBE  (2026-08-15)
+# Added HERE rather than in a sibling module: the safety/ mount ignores
+# **/modal_safety_test/**, so a sibling file cannot import this one in-container.
+# The entrypoint file itself is mounted to /root/, so everything must live in it.
+# =============================================================================
+PD_MODEL = "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B"
+PD_OUT = f"{CACHE_DIR}/pathdrift_out"
+
+
+@app.function(image=image, timeout=600, retries=0, volumes={CACHE_DIR: hf_cache})
+def pd_preflight() -> dict:
+    """CPU-only (~$0): imports, path resolution and datasets, before any GPU is touched."""
+    import importlib
+    import sys as _s
+    from pathlib import Path as _P
+
+    out = {"ok": True, "checks": {}}
+    _s.path.insert(0, f"{SAFETY_REMOTE}/drift")
+    for m in ("drift_screen", "refusal_probe", "pathdrift", "harm_judge"):
+        try:
+            importlib.import_module(m)
+            out["checks"][m] = "ok"
+        except Exception as e:
+            out["checks"][m] = f"FAIL {type(e).__name__}: {e}"
+            out["ok"] = False
+    try:
+        import run_pathdrift_probe as R
+        out["checks"]["run_pathdrift_probe"] = "ok"
+        out["checks"]["ROOT"] = str(R.ROOT)
+        out["checks"]["DATA"] = str(R.DATA)
+        for f in ("harmbench_all.json", "alpaca_all.json", "advbench_extract.json"):
+            ok = (R.DATA / f).exists()
+            out["checks"][f] = ok
+            out["ok"] = out["ok"] and bool(ok)
+    except Exception as e:
+        out["checks"]["run_pathdrift_probe"] = f"FAIL {type(e).__name__}: {e}"
+        out["ok"] = False
+    try:
+        import pathdrift as _pd
+        out["checks"]["arms"] = _pd.ARMS
+        out["checks"]["role_builds"] = "ZZ" in _pd.build("ZZ", "role")
+    except Exception as e:
+        out["checks"]["arms"] = f"FAIL {e}"
+        out["ok"] = False
+    _P(PD_OUT).mkdir(parents=True, exist_ok=True)
+    hf_cache.commit()
+    return out
+
+
+@app.function(image=image, timeout=3600, retries=0, secrets=[hf_secret],
+              volumes={CACHE_DIR: hf_cache})
+def pd_prewarm(model: str = PD_MODEL) -> dict:
+    """Weight download at CPU rates into the Volume, so the A100 never pays for a ~30GB pull."""
+    from pathlib import Path as _P
+    from huggingface_hub import snapshot_download
+    p = snapshot_download(model, max_workers=8)
+    hf_cache.commit()
+    gb = sum(f.stat().st_size for f in _P(p).rglob("*") if f.is_file()) / 1e9
+    return {"model": model, "gb": round(gb, 2)}
+
+
+@app.function(image=image, gpu="A100-40GB", timeout=21600, retries=0, secrets=[hf_secret],
+              volumes={CACHE_DIR: hf_cache})
+def cc_run(run: str, calib: str, stage: str, max_prompts: int, max_prefixes: int,
+           per_prompt: int, samples: int, budget_n: int, min_frac: float, layer: int,
+           max_new: int, max_answer: int, gen_timeout: int, budget_sec: int, seed: int,
+           temp: float, model: str = PD_MODEL, batch_size: int = 4) -> dict:
+    """Commitment continuation. `stage` is 'screen' or 'continue' (continue also scores+reports).
+
+    Split across two calls because the screen is a long harvest and the continuation is a long
+    sweep; each checkpoints to the Volume per prompt/prefix so neither can be lost whole.
+    """
+    import sys as _s
+    import types
+    from pathlib import Path as _P
+
+    _s.path.insert(0, f"{SAFETY_REMOTE}/drift")
+    import run_commit_continue as R
+
+    hf_cache.reload()
+    _P(PD_OUT).mkdir(parents=True, exist_ok=True)
+    a = types.SimpleNamespace(
+        run=run, calib=calib, model=model, pool_file="harmbench_all.json", out=PD_OUT,
+        layer=layer, n_extract=128, min_frac=min_frac, max_prompts=max_prompts,
+        max_prefixes=max_prefixes, per_prompt=per_prompt, samples=samples, budget_n=budget_n,
+        max_new=max_new, max_answer=max_answer, gen_timeout=gen_timeout, budget_sec=budget_sec,
+        seed=seed, temp=temp, batch_size=batch_size, boot=10000, load_4bit=False,
+        all_categories=False, resume=True)
+    a.on_persist = hf_cache.commit
+
+    if stage == "screen":
+        R.screen_stage(a)
+        hf_cache.commit()
+        pref = json.loads((_P(PD_OUT) / f"{run}_prefixes.json").read_text())
+        sm = json.loads((_P(PD_OUT) / f"{run}_screen_meta.json").read_text())
+        return {"stage": "screen", "screen_meta": sm,
+                "prefixes": [{k: v for k, v in p.items()
+                              if k not in ("prefix_ids", "request")} for p in pref]}
+
+    R.continue_stage(a)
+    hf_cache.commit()
+    R.score_stage(a)
+    hf_cache.commit()
+    R.report_stage(a)
+    hf_cache.commit()
+    d = _P(PD_OUT)
+    meta = json.loads((d / f"{run}_meta.json").read_text())
+    verd = json.loads((d / f"{run}_verdicts.json").read_text())
+    return {"stage": "continue", "meta_rows": meta["meta_rows"], "run": meta["run"],
+            "verdicts": verd["verdicts"]}
+
+
+@app.function(image=image, timeout=900, retries=0, volumes={CACHE_DIR: hf_cache})
+def cc_fetch(run: str) -> dict:
+    """CPU reader for a commitment-continuation run; never returns prefix token ids or text."""
+    from pathlib import Path as _P
+    d = _P(PD_OUT)
+    hf_cache.reload()
+    got = {}
+    for k in ("screen_meta", "meta", "verdicts"):
+        f = d / f"{run}_{k}.json"
+        got[k] = json.loads(f.read_text()) if f.exists() else None
+    pf = d / f"{run}_prefixes.json"
+    got["n_prefixes"] = len(json.loads(pf.read_text())) if pf.exists() else 0
+    return got
+
+
+@app.function(image=image, timeout=900, retries=0, volumes={CACHE_DIR: hf_cache})
+def pd_report(run: str, boot: int = 10000, seed: int = 0) -> dict:
+    """Report only, on CPU. Needs no GPU: it reads meta + verdicts off the Volume."""
+    import sys as _s
+    import types
+    from pathlib import Path as _P
+
+    _s.path.insert(0, f"{SAFETY_REMOTE}/drift")
+    import run_pathdrift_probe as R
+
+    hf_cache.reload()
+    R.report_stage(types.SimpleNamespace(run=run, out=PD_OUT, boot=boot, seed=seed))
+    d = _P(PD_OUT)
+    meta = json.loads((d / f"{run}_meta.json").read_text())
+    verd = json.loads((d / f"{run}_verdicts.json").read_text())
+    return {"calib": meta["calib"], "meta_rows": meta["meta_rows"], "run": meta["run"],
+            "verdicts": verd["verdicts"]}
+
+
+@app.function(image=image, timeout=900, retries=0, volumes={CACHE_DIR: hf_cache})
+def pd_fetch(run: str) -> dict:
+    """CPU reader: recover a finished/partial run from the Volume after a client disconnect."""
+    from pathlib import Path as _P
+    d = _P(PD_OUT)
+    hf_cache.reload()
+    got = {}
+    for k in ("calib", "meta", "verdicts"):
+        f = d / f"{run}_{k}.json"
+        got[k] = json.loads(f.read_text()) if f.exists() else None
+    return got
+
+
+@app.function(image=image, gpu="A100-40GB", timeout=7200, retries=0, secrets=[hf_secret],
+              volumes={CACHE_DIR: hf_cache})
+def pd_score(run: str, batch_size: int = 4) -> dict:
+    """score + report only. No generation model is loaded, so the judge gets the whole card.
+
+    Split out because scoring in the same call as gen OOMs: the 29.5GB generator's freed blocks
+    stay in the caching allocator while the 13B judge loads on top of them.
+    """
+    import sys as _s
+    import types
+    from pathlib import Path as _P
+
+    _s.path.insert(0, f"{SAFETY_REMOTE}/drift")
+    import run_pathdrift_probe as R
+
+    hf_cache.reload()
+    a = types.SimpleNamespace(run=run, out=PD_OUT, batch_size=batch_size, load_4bit=False,
+                              boot=10000, seed=0)
+    if not (_P(PD_OUT) / f"{run}_verdicts.json").exists():
+        R.score_stage(a)
+        hf_cache.commit()
+    else:
+        print(f"[pd] reusing verdicts for {run}")
+    R.report_stage(a)
+    hf_cache.commit()
+
+    d = _P(PD_OUT)
+    meta = json.loads((d / f"{run}_meta.json").read_text())
+    verd = json.loads((d / f"{run}_verdicts.json").read_text())
+    return {"calib": meta["calib"], "meta_rows": meta["meta_rows"], "run": meta["run"],
+            "verdicts": verd["verdicts"]}
+
+
+@app.function(image=image, gpu="A100-40GB", timeout=21600, retries=0, secrets=[hf_secret],
+              volumes={CACHE_DIR: hf_cache})
+def pd_probe(run: str, arms: str, max_prompts: int, samples: int, layer: int, calib_n: int,
+             max_new: int, gen_timeout: int, budget_sec: int, seed: int, temp: float,
+             model: str = PD_MODEL, batch_size: int = 8, calib_from: str = "") -> dict:
+    """calibrate -> gen -> score -> report in one bf16 GPU session, committing after each stage."""
+    import sys as _s
+    import types
+    from pathlib import Path as _P
+
+    _s.path.insert(0, f"{SAFETY_REMOTE}/drift")
+    import run_pathdrift_probe as R
+
+    _P(PD_OUT).mkdir(parents=True, exist_ok=True)
+    a = types.SimpleNamespace(
+        stage="calibrate", run=run, model=model, pool_file="harmbench_all.json",
+        layer=layer, n_extract=128, calib_n=calib_n, arms=arms, samples=samples,
+        max_prompts=max_prompts, seed=seed, temp=temp, max_new=max_new,
+        gen_timeout=gen_timeout, budget_sec=budget_sec, batch_size=batch_size,
+        boot=10000, load_4bit=False, out=PD_OUT)
+    a.on_persist = hf_cache.commit
+    a.resume = True
+
+    calib_f = _P(PD_OUT) / f"{run}_calib.json"
+    if not calib_f.exists() and calib_from:
+        src = _P(PD_OUT) / f"{calib_from}_calib.json"
+        if src.exists():
+            calib_f.write_text(src.read_text())
+            hf_cache.commit()
+            print(f"[pd] calibration copied from {calib_from} (same model/layer/seed)")
+    if calib_f.exists():
+        print(f"[pd] reusing calibration {calib_f}")
+    else:
+        R.calibrate_stage(a)
+        hf_cache.commit()
+    cal = json.loads(calib_f.read_text())
+    if cal["n_refused"] < 5 or cal["separation"] <= 0:
+        return {"stopped": "calibration_failed", "calib": cal}
+
+    for st in ("gen", "score", "report"):
+        a.stage = st
+        {"gen": R.gen_stage, "score": R.score_stage, "report": R.report_stage}[st](a)
+        hf_cache.commit()
+
+    d = _P(PD_OUT)
+    meta = json.loads((d / f"{run}_meta.json").read_text())
+    verd = json.loads((d / f"{run}_verdicts.json").read_text())
+    return {"calib": cal, "meta_rows": meta["meta_rows"], "run": meta["run"],
+            "verdicts": verd["verdicts"]}
+
+
+@app.local_entrypoint()
+def pathdrift(stage: str = "probe", run: str = "pd_modal_role", arms: str = "none,role",
+              max_prompts: int = 40, samples: int = 2, layer: int = 20, calib_n: int = 20,
+              max_new: int = 1600, gen_timeout: int = 240, budget_sec: int = 5400,
+              seed: int = 0, temp: float = 0.6, model: str = PD_MODEL,
+              batch_size: int = 4, calib_from: str = ""):
+    if stage == "preflight":
+        r = pd_preflight.remote()
+        print(json.dumps(r, indent=2))
+        print("\nPREFLIGHT " + ("PASS -- safe to prewarm" if r["ok"] else "FAIL -- fix before GPU"))
+        return
+    if stage == "prewarm":
+        print(json.dumps(pd_prewarm.remote(model), indent=2))
+        return
+    if stage == "fetch":
+        g = pd_fetch.remote(run)
+        if not g.get("meta"):
+            print(f"nothing on the Volume for run={run}")
+            print(json.dumps({k: bool(v) for k, v in g.items()}, indent=2))
+            return
+        local = REPO_ROOT / "do_not_track" / "drift"
+        local.mkdir(parents=True, exist_ok=True)
+        (local / f"{run}_meta.json").write_text(json.dumps(
+            {"meta_rows": g["meta"]["meta_rows"], "calib": g["calib"],
+             "run": g["meta"]["run"]}, ensure_ascii=False))
+        v = (g.get("verdicts") or {}).get("verdicts", [])
+        (local / f"{run}_verdicts.json").write_text(json.dumps(
+            {"verdicts": v, "classifier": CLASSIFIER_PATH}, ensure_ascii=False))
+        print(f"saved -> {local / (run + '_meta.json')}")
+        print(f"rows={len(g['meta']['meta_rows'])} judged={len(v)} "
+              f"stop={g['meta']['run'].get('stop_reason')}")
+        return
+
+    if stage in ("score", "report"):
+        r = pd_report.remote(run) if stage == "report" else pd_score.remote(run, batch_size)
+        local = REPO_ROOT / "do_not_track" / "drift"
+        local.mkdir(parents=True, exist_ok=True)
+        (local / f"{run}_meta.json").write_text(json.dumps(
+            {"meta_rows": r["meta_rows"], "calib": r["calib"], "run": r["run"]},
+            ensure_ascii=False))
+        (local / f"{run}_verdicts.json").write_text(json.dumps(
+            {"verdicts": r["verdicts"], "classifier": CLASSIFIER_PATH}, ensure_ascii=False))
+        print(f"\nsaved -> {local / (run + '_meta.json')}")
+        print(f"rows={len(r['meta_rows'])} judged={len(r['verdicts'])}")
+        return
+
+    kw = dict(run=run, arms=arms, max_prompts=max_prompts, samples=samples,
+              layer=layer, calib_n=calib_n, max_new=max_new,
+              gen_timeout=gen_timeout, budget_sec=budget_sec, seed=seed,
+              temp=temp, model=model, calib_from=calib_from)
+    if stage == "spawn":
+        h = pd_probe.spawn(**kw)
+        print(f"spawned call {h.object_id}")
+        print(f"no client is attached; disconnecting cannot cancel it")
+        print(f"recover with: --stage fetch --run {run}")
+        return
+    r = pd_probe.remote(**kw)
+    if r.get("stopped"):
+        print("STOPPED:", r["stopped"])
+        print(json.dumps(r.get("calib", {}), indent=2))
+        return
+    local = REPO_ROOT / "do_not_track" / "drift"
+    local.mkdir(parents=True, exist_ok=True)
+    (local / f"{run}_meta.json").write_text(json.dumps(
+        {"meta_rows": r["meta_rows"], "calib": r["calib"], "run": r["run"]}, ensure_ascii=False))
+    (local / f"{run}_verdicts.json").write_text(json.dumps(
+        {"verdicts": r["verdicts"], "classifier": CLASSIFIER_PATH}, ensure_ascii=False))
+    print(f"\nsaved -> {local / (run + '_meta.json')}")
+    print(f"rows={len(r['meta_rows'])} judged={len(r['verdicts'])}")
+
+
+@app.local_entrypoint()
+def commitcont(stage: str = "screen", run: str = "cc_r1d14b", calib: str = "pd_modal_role",
+               max_prompts: int = 90, max_prefixes: int = 45, per_prompt: int = 3,
+               samples: int = 3, budget_n: int = 1024, min_frac: float = 0.10,
+               layer: int = 20, max_new: int = 3000, max_answer: int = 800,
+               gen_timeout: int = 300, budget_sec: int = 16200, seed: int = 0,
+               temp: float = 0.6, model: str = PD_MODEL, batch_size: int = 4):
+    if stage == "fetch":
+        g = cc_fetch.remote(run)
+        print(json.dumps({"screen_meta": g["screen_meta"], "n_prefixes": g["n_prefixes"],
+                          "rows": len((g["meta"] or {}).get("meta_rows", [])),
+                          "judged": len((g["verdicts"] or {}).get("verdicts", [])),
+                          "stop": ((g["meta"] or {}).get("run") or {}).get("stop_reason")},
+                         indent=2))
+        return
+
+    kw = dict(run=run, calib=calib, stage=stage, max_prompts=max_prompts,
+              max_prefixes=max_prefixes, per_prompt=per_prompt, samples=samples,
+              budget_n=budget_n, min_frac=min_frac, layer=layer, max_new=max_new,
+              max_answer=max_answer, gen_timeout=gen_timeout, budget_sec=budget_sec,
+              seed=seed, temp=temp, model=model, batch_size=batch_size)
+    if stage.endswith("_spawn"):
+        kw["stage"] = stage.replace("_spawn", "")
+        h = cc_run.spawn(**kw)
+        print(f"spawned call {h.object_id} (stage={kw['stage']})")
+        print(f"no client owns the input; recover with: --stage fetch --run {run}")
+        return
+
+    r = cc_run.remote(**kw)
+    local = REPO_ROOT / "do_not_track" / "drift"
+    local.mkdir(parents=True, exist_ok=True)
+    if r["stage"] == "screen":
+        (local / f"{run}_screen_meta.json").write_text(json.dumps(r["screen_meta"]))
+        (local / f"{run}_prefix_index.json").write_text(json.dumps(r["prefixes"]))
+        print(json.dumps(r["screen_meta"], indent=2))
+        print(f"\nprefixes={len(r['prefixes'])} -> {local / (run + '_prefix_index.json')}")
+        return
+    (local / f"{run}_meta.json").write_text(json.dumps(
+        {"meta_rows": r["meta_rows"], "run": r["run"]}, ensure_ascii=False))
+    (local / f"{run}_verdicts.json").write_text(json.dumps(
+        {"verdicts": r["verdicts"], "classifier": CLASSIFIER_PATH}, ensure_ascii=False))
+    print(f"\nsaved -> {local / (run + '_meta.json')}")
+    print(f"rows={len(r['meta_rows'])} judged={len(r['verdicts'])}")
