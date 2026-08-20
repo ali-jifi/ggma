@@ -68,6 +68,20 @@ room to occur.
 refusals the detector missed. The dissociation is probably real but its *magnitude* is not
 established until re-scored with the augmented matcher.
 
+> **CLOSED 2026-08-19 — `safety/drift/rescore_stance.py`, full disposition in `.claude/B6_RESCORE_RESULT.md`.**
+> The dissociation **survives**: pooled 4B prompt-only arms go **15.7× → 14.6×** (N=816 attempts;
+> stance numerator shrinks 6.5%; rescue rate 0.065 [0.041, 0.092] clustered over 41 prompts). The
+> quoted "substring 0.70" behind the 35× came from the **JailbreakBench** scorer, whose prefix list
+> already contains "I am unable to" — so A4 never inflated that headline.
+> But the detector error is worse than a rate error elsewhere: it is **32–48% of the comply pile on
+> `arm_drift`/`arm_wait`/`arm_push` and 0% on `arm_b`/`arm_bw`**; it contaminated the **construct**
+> (`drift = early and not late and label == "comply"` ⇒ 12/37 of the "genuine drift" pile were
+> refusals); and it mis-built the **baseline screen** (41 → 57 refused, 16 severe behaviors dropped).
+> Rescues are genuine: 41/42 open the answer, 0/42 HarmBench-harmful, 41/42 independently flagged by
+> JBB. Harm ladder rates are unchanged (per-attempt HarmBench). **Still open:** `drift_harm_14b` is
+> on the hub and un-rescored; canonical *false positives* remain untested because HarmBench only ever
+> scored comply piles; closing the residual needs task 0.3 (LLM refusal judge).
+
 ---
 
 ## C. Checked and NOT broken

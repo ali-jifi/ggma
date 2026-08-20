@@ -108,6 +108,21 @@ def commit_index(curve, form_thresh, min_frac, think_end_idx=None):
     return None
 
 
+def first_cross(curve, form_thresh, think_end_idx=None):
+    """First threshold crossing anywhere before </think>, with NO position gate.
+
+    commit_index() answers "does this qualify as a prefix". This answers "where did intention
+    first cross, in absolute tokens" -- which is the quantity the census needs, because a trace
+    rejected for crossing too early is exactly the observation that tells us whether late-forming
+    refusals exist. Never use this to select prefixes.
+    """
+    limit = len(curve) if think_end_idx is None else min(len(curve), think_end_idx)
+    for i in range(limit):
+        if curve[i] >= form_thresh:
+            return i
+    return None
+
+
 # ------------------------------- stages -------------------------------
 def screen_stage(args):
     """Harvest prefixes whose refusal intention forms mid-chain."""
@@ -133,7 +148,13 @@ def screen_stage(args):
 
     pf = out / f"{args.run}_prefixes.json"
     sm = out / f"{args.run}_screen_meta.json"
+    cen_f = out / f"{args.run}_census.json"
     prefixes = json.loads(pf.read_text(encoding="utf-8")) if (args.resume and pf.exists()) else []
+    # One row per SCANNED trace, kept or rejected. Selecting only survivors makes the screen
+    # unfalsifiable: cc_strict's 8 prefixes all crossed at token 18-99 and we could not tell
+    # whether late-forming refusals are rare or absent, because rejected traces left no trace.
+    census = json.loads(cen_f.read_text(encoding="utf-8")) if (
+        args.resume and cen_f.exists()) else []
     # resume from prompts SCANNED, not from the last prompt that happened to yield a prefix --
     # most prompts yield nothing, so the latter would silently rescan them every restart.
     done = (json.loads(sm.read_text(encoding="utf-8")).get("scanned", 0)
@@ -164,6 +185,13 @@ def screen_stage(args):
                                args.seed * 100000 + scanned * 977, args.gen_timeout, args.temp)
             screen_label = ds.answer_label(txt0)
             if screen_label != ds.REFUSE:
+                census.append({"prompt_idx": scanned, "sample": None,
+                               "behavior_id": p.get("behavior_id"),
+                               "category": p.get("category", "_"), "reject": "screen_draw",
+                               "screen_draw_label": screen_label, "nat_answer_label": None,
+                               "first_cross_idx": None, "commit_idx": None, "gen_len": None,
+                               "think_end_idx": None, "peak": None, "peak_frac": None})
+                cen_f.write_text(json.dumps(census, ensure_ascii=False), encoding="utf-8")
                 torch.cuda.empty_cache()
                 sm.write_text(json.dumps(
                     {"scanned": scanned, "n_prefixes": len(prefixes), "stop_reason": stop,
@@ -189,19 +217,35 @@ def screen_stage(args):
             gen, txt = _gen_ids(model, tok, ids0, args.max_new,
                                 args.seed * 100000 + scanned * 131 + s, args.gen_timeout, args.temp)
             if len(gen) == 0:
+                census.append({"prompt_idx": scanned, "sample": s,
+                               "behavior_id": p.get("behavior_id"),
+                               "category": p.get("category", "_"), "reject": "empty_gen",
+                               "screen_draw_label": screen_label, "nat_answer_label": None,
+                               "first_cross_idx": None, "commit_idx": None, "gen_len": 0,
+                               "think_end_idx": None, "peak": None, "peak_frac": None})
                 continue
             curve = rp.trace_curve(model, tok, ids0, gen, d, args.layer)
             te = _think_end_index(gen, think_end_id)
             t = commit_index(curve, ft, args.min_frac, te)
-            if t is None:
-                continue
+            fc = first_cross(curve, ft, te)
             nat_label = ds.answer_label(txt)
+            summ = rp.summarize_curve(curve)
+            row = {"prompt_idx": scanned, "sample": s, "behavior_id": p.get("behavior_id"),
+                   "category": p.get("category", "_"), "reject": None,
+                   "screen_draw_label": screen_label, "nat_answer_label": nat_label,
+                   "first_cross_idx": fc, "commit_idx": t, "gen_len": int(len(gen)),
+                   "think_end_idx": te, "peak": round(summ["peak"], 4),
+                   "peak_frac": summ["peak_frac"]}
             # A prefix is a COMMITMENT only if the trace it came from actually refused. Threshold
             # crossing alone is the model CONSIDERING a refusal: on cc_hub14b, comply-bound traces
             # crossed just as strongly (commit_score 18.37 vs 18.60) and then complied 10/12.
-            if args.require_refuse and nat_label != ds.REFUSE:
+            if t is None:
+                row["reject"] = "no_cross" if fc is None else "cross_too_early"
+            elif args.require_refuse and nat_label != ds.REFUSE:
+                row["reject"] = "nat_not_refuse"
+            census.append(row)
+            if row["reject"]:
                 continue
-            summ = rp.summarize_curve(curve)
             prefixes.append({
                 "prefix_id": f"{scanned}_{s}", "prompt_idx": scanned, "sample": s,
                 "behavior_id": p.get("behavior_id"), "category": p.get("category", "_"),
@@ -215,6 +259,7 @@ def screen_stage(args):
             kept_here += 1
         torch.cuda.empty_cache()
         pf.write_text(json.dumps(prefixes, ensure_ascii=False), encoding="utf-8")
+        cen_f.write_text(json.dumps(census, ensure_ascii=False), encoding="utf-8")
         sm.write_text(json.dumps(
             {"scanned": scanned, "n_prefixes": len(prefixes), "stop_reason": stop,
              "form_thresh": ft, "min_frac": args.min_frac, "model": run_drift.MODEL,
@@ -389,10 +434,75 @@ def report_stage(args):
     print("        DURABLE once formed, and every prior arm was manipulating formation.")
 
 
+_BINS = [(0, 50), (50, 100), (100, 200), (200, 500), (500, 10 ** 9)]
+
+
+def census_stage(args):
+    """Where does refusal intention first cross, and does the trace end up refusing?
+
+    The screen only ever recorded survivors, so a null could mean 'commitments resist erosion' or
+    'no erodible commitment was ever sampled'. This separates those. The cell that matters is
+    (first_cross_idx >= --late-idx) x (nat_answer_label == REFUSE): if it is empty, late-forming
+    genuine commitments do not exist on this substrate and the erosion question is unanswerable
+    here regardless of n. Text-free: indices, lengths and labels only.
+    """
+    import statistics as st
+    out = Path(args.out)
+    rows = json.loads((out / f"{args.run}_census.json").read_text(encoding="utf-8"))
+    scored = [r for r in rows if r["reject"] not in ("screen_draw", "empty_gen")]
+
+    print(f"\n===== SCREEN CENSUS -- {args.run} =====")
+    print(f"  scanned rows {len(rows)}; with a curve {len(scored)}; "
+          f"skipped at draw 0 {sum(1 for r in rows if r['reject'] == 'screen_draw')}")
+    print(f"  reject reasons: {dict(Counter(r['reject'] or 'KEPT' for r in rows))}")
+
+    labels = [ds.REFUSE, ds.COMPLY, ds.NONE]
+    print(f"\n  first_cross_idx x nat_answer_label (rows with a curve)")
+    print(f"  {'bucket':>12} " + " ".join(f"{str(l):>9}" for l in labels) + f"{'total':>9}")
+    for lo, hi in [(None, None)] + _BINS:
+        if lo is None:
+            sel = [r for r in scored if r["first_cross_idx"] is None]
+            name = "never"
+        else:
+            sel = [r for r in scored if r["first_cross_idx"] is not None
+                   and lo <= r["first_cross_idx"] < hi]
+            name = f"{lo}-{hi if hi < 10**9 else '+'}"
+        cells = [sum(1 for r in sel if r["nat_answer_label"] == l) for l in labels]
+        print(f"  {name:>12} " + " ".join(f"{c:>9}" for c in cells) + f"{len(sel):>9}")
+
+    late = [r for r in scored if r["first_cross_idx"] is not None
+            and r["first_cross_idx"] >= args.late_idx]
+    late_ref = [r for r in late if r["nat_answer_label"] == ds.REFUSE]
+    print(f"\n  THE CELL: first_cross_idx >= {args.late_idx} AND nat=REFUSE -> "
+          f"{len(late_ref)} of {len(scored)} traces ({len(late)} cross late in total)")
+    if not late_ref:
+        print(f"    empty. rule-of-three upper bound {ds.rule_of_three_upper(len(scored)):.4f} -- "
+              f"report as a bound, never as 'none exist'")
+    else:
+        for r in late_ref:
+            print(f"    idx {r['first_cross_idx']:>5} gen_len {r['gen_len']:>5} "
+                  f"frac {r['first_cross_idx']/max(1,r['gen_len']-1):.3f}  {r['category']}")
+
+    print("\n  gen_len by nat_answer_label (the length confound behind commit_frac)")
+    for l in labels:
+        g = sorted(r["gen_len"] for r in scored if r["nat_answer_label"] == l and r["gen_len"])
+        if g:
+            print(f"    {str(l):>9} n={len(g):>4} median {st.median(g):>7.0f} "
+                  f"min {g[0]:>5} max {g[-1]:>6}")
+
+    print("\n  crossing position by category (rows with a curve)")
+    for c in sorted({r["category"] for r in scored}):
+        sel = [r for r in scored if r["category"] == c]
+        fc = [r["first_cross_idx"] for r in sel if r["first_cross_idx"] is not None]
+        ref = sum(1 for r in sel if r["nat_answer_label"] == ds.REFUSE)
+        print(f"    {c:>24} n={len(sel):>4} crossed {len(fc):>4} "
+              f"median_idx {st.median(fc) if fc else float('nan'):>7.0f} refused {ref:>4}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--stage", required=True,
-                    choices=["screen", "continue", "score", "report"])
+                    choices=["screen", "continue", "score", "report", "census"])
     ap.add_argument("--run", default="cc_r1d14b")
     ap.add_argument("--calib", default="pd_modal_role")
     ap.add_argument("--model", default="")
@@ -420,10 +530,12 @@ def main():
                     help="keep a prefix only if its source trace actually refused")
     ap.add_argument("--screen-draw", action="store_true",
                     help="independent draw 0 must refuse before the prompt yields any prefix")
+    ap.add_argument("--late-idx", type=int, default=300,
+                    help="census: absolute token index above which a crossing counts as LATE")
     ap.add_argument("--resume", action="store_true")
     a = ap.parse_args()
-    {"screen": screen_stage, "continue": continue_stage,
-     "score": score_stage, "report": report_stage}[a.stage](a)
+    {"screen": screen_stage, "continue": continue_stage, "score": score_stage,
+     "report": report_stage, "census": census_stage}[a.stage](a)
 
 
 if __name__ == "__main__":
