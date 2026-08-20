@@ -194,6 +194,60 @@ decisive cell remains thin and skewed toward the safe categories. The selection 
 the model refuses harassment and illegal prompts decisively and briefly, which is exactly the
 profile the strict screen keeps.
 
+## The census — the erodible object is not in this substrate
+
+`cc_strict` recorded only survivors, so its null was ambiguous between "commitments resist erosion"
+and "no erodible commitment was ever sampled". `cc_census` re-ran the identical scan with a census
+of every trace, kept or rejected (same seed, pool file and category filter, so it reproduced the
+same 8 prefixes and the same `commit_frac` median 0.121 — the reconstruction is faithful).
+
+192 traces with a probe curve, from 213 prompts scanned (149 skipped at draw 0):
+
+| first crossing (abs. tokens) | refuse | comply | none | total |
+|---|---|---|---|---|
+| never | 9 | 24 | 0 | 33 |
+| 0-50 | **86** | **66** | 3 | 155 |
+| 50-100 | 1 | 0 | 0 | 1 |
+| 100-200 | 0 | 1 | 0 | 1 |
+| 200-500 | 0 | 0 | 0 | 0 |
+| 500+ | 0 | 2 | 0 | 2 |
+
+**The decisive cell — crossing at token >= 300 AND a refusing trace — is 0 of 192, rule-of-three
+upper bound 0.0156.** Both late crossings complied, matching `cc_hub14b` where every late crossing
+was compliance-bound deliberation.
+
+81% of traces cross within the first 50 tokens. Per-category median crossing index: 1
+(`chemical_biological`, `illegal`), 14 (`cybercrime_intrusion`), 18 (`harassment_bullying`). Between
+token 50 and 500 there are two traces out of 192. The distribution is not early-with-a-tail; it is
+bimodal at token ~1 and "never".
+
+So the 8 surviving prefixes were never mid-chain commitments — they are the right tail of an
+immediate-reaction distribution, admitted only because their traces were short enough that token
+18-99 cleared frac 0.10. `cross_too_early` was the modal rejection at 148 of 192.
+
+The length confound is now measured directly: **median `gen_len` 376 for refusing traces against
+1182 for complying ones**, a 3.1x ratio, which is why any fraction-normalized position was
+uninterpretable.
+
+**Conclusion: the erosion hypothesis is untestable on DeepSeek-R1-Distill-Qwen-14B at any n.** This
+is not a null result about durability — it is the absence of the object the design exists to
+perturb, and it explains this substrate's prior nulls mechanically.
+
+### A probe-validity problem the census also exposes
+
+The probe direction is calibrated on *refused harmful prompts vs benign prompts*, so the two classes
+differ in both refusal and prompt harmfulness and the direction may encode either. The census
+supplies the within-harmful test the calibration never did, and the direction is weak:
+
+- crossed at all -> 87/159 refuse (**55%**)
+- never crossed -> 9/33 refuse (**27%**)
+- crossing *position*, among those that crossed -> no predictive value
+
+There is real refusal signal, but what crosses at token 1 is plausibly "this prompt is harmful"
+rather than "I intend to refuse". The corrected contrast is harmful-refused vs **harmful-complied**.
+Every position claim made with this probe — here, in `pd_modal_role` and in `pd_modal_load` —
+inherits the issue.
+
 ## The correction
 
 When scoping this run the `refused_throughout` requirement was dropped from the screen to raise
@@ -251,22 +305,18 @@ control shows the entire effect is baseline composition.
 
 1. ~~**Fix the screen**~~ — DONE in `cc_strict` (`--require-refuse --screen-draw`). Result
    replicated; the compliance-bound dilution is gone.
-2. **Establish whether late-forming genuine commitments exist at all.** This is now the gating
-   question, and it is answerable from data already on disk plus one cheap instrumented screen: log
-   `commit_idx` and `nat_answer_label` for *every* scanned trace, including rejected ones, instead
-   of only for prefixes that pass. If the joint distribution has no mass at (idx > 300, nat=REFUSE),
-   the erosion hypothesis is untestable on this substrate and the program should say so directly
-   rather than accumulating nulls against a population that does not exist.
-3. **Switch the criterion from fractional to absolute** — crossing after N tokens of CoT, not after
-   a fraction of a length that the outcome determines. `--min-frac 0.10` currently admits token-18
-   reactions in short traces and would reject token-400 deliberations in long ones. This also
-   raises yield, which is why it should not be done before (2): a looser criterion that still
-   selects immediate refusals just buys more of the same.
-4. **Raise n only after 2 and 3.** 11 prompts pooled. At 0.038 prefixes per prompt a 20-prompt
-   decisive cell costs ~500 prompts of screening, roughly 13 GPU-hours, and would currently buy
-   more harassment/illegal prefixes rather than better coverage.
-5. **Generality** — `cc_strict` has zero cyber and zero chem-bio prefixes, which is the inverse of
-   the gap flagged after `cc_hub14b`. Any durability claim needs both ends.
+2. ~~**Establish whether late-forming genuine commitments exist**~~ — DONE via `cc_census`. They do
+   not, on this substrate, bound 0.0156. This closes the design here.
+3. **Recalibrate the probe on harmful-refused vs harmful-complied** before it is used to locate
+   anything on any model. The current contrast cannot distinguish a refusal direction from a
+   prompt-harmfulness direction, and the within-harmful predictive test above is weak.
+4. **Move substrate.** Qwen3-14B is the candidate: the clip sweep put its refusal consolidation at
+   frac 0.8-0.9 at two sample sizes (n=22, n=31), by a behavioral method independent of the probe,
+   with 14 prompts building refusal against 2 eroding. If any available model forms refusal through
+   deliberation rather than on contact, it is that one. Run the census there — recalibrated — before
+   running any intervention.
+5. **Raising n on this substrate is pointless** and should not be scheduled. The decisive cell is
+   empty by construction, not by sampling.
 
 ## Reproduce
 
