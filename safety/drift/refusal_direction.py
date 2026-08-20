@@ -179,6 +179,7 @@ def fit_stage(args):
         return
 
     folds = prompt_folds(pid, args.folds, args.seed)
+    fitted, report = {}, {}
     print(f"\n  {'locus':>12} {'cos(legacy)':>12} {'AUC cv':>8} {'AUC legacy':>11} {'norm':>8}")
     for li, loc in enumerate(d["loci"]):
         X = V[keep, li, :]
@@ -204,6 +205,16 @@ def fit_stage(args):
         la = auc((X @ legacy).tolist(), y)
         print(f"  {loc:>12} {cos:>+12.3f} {cv:>8.3f} {la if la is not None else float('nan'):>11.3f} "
               f"{nrm:>8.2f}")
+        # Save the full-data fit, not a fold fit: the CV number above is the honest estimate of how
+        # well it generalizes, but the direction to USE downstream should see every trace.
+        fitted[loc] = (full / (nrm + 1e-8)).half()
+        report[loc] = {"cos_legacy": cos, "auc_cv": cv, "auc_legacy": la, "norm": nrm}
+
+    torch.save({"directions": fitted, "report": report, "layer": d["layer"],
+                "model": d["model"], "early_k": d["early_k"],
+                "n_refuse": sum(y), "n_comply": len(y) - sum(y),
+                "n_prompts": len(set(pid))}, out / f"{args.run}_direction.pt")
+    print(f"\n  saved {args.run}_direction.pt (loci: {', '.join(fitted)})")
 
     print("\n  READ: cos is the corrected direction against the incumbent Arditi direction.")
     print("        |cos| near 1 -> the harmful-vs-benign confound is harmless in practice and the")
