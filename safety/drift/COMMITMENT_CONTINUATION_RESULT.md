@@ -229,9 +229,9 @@ The length confound is now measured directly: **median `gen_len` 376 for refusin
 1182 for complying ones**, a 3.1x ratio, which is why any fraction-normalized position was
 uninterpretable.
 
-**Conclusion: the erosion hypothesis is untestable on DeepSeek-R1-Distill-Qwen-14B at any n.** This
-is not a null result about durability — it is the absence of the object the design exists to
-perturb, and it explains this substrate's prior nulls mechanically.
+**Read this table as the LEGACY-probe measurement.** Its conclusion — that the object is absent —
+was overturned within a day by re-running the census with a validated direction. See
+[The corrected census](#the-corrected-census-the-object-is-rare-not-absent).
 
 ### A probe-validity problem the census also exposes
 
@@ -247,6 +247,59 @@ There is real refusal signal, but what crosses at token 1 is plausibly "this pro
 rather than "I intend to refuse". The corrected contrast is harmful-refused vs **harmful-complied**.
 Every position claim made with this probe — here, in `pd_modal_role` and in `pd_modal_load` —
 inherits the issue.
+
+### The corrected census — the object is RARE, not absent
+
+`refusal_direction.py` refit the direction on harmful-refused vs harmful-complied and confirmed the
+incumbent was not a refusal direction: cosine against it is 0.14 (R1-Distill) and −0.09 (Qwen3-14B)
+at `gen_early`, and on Qwen3-14B the legacy direction is **anti-predictive** (AUC 0.36 vs 0.91 for
+the corrected fit). Re-running the census with the corrected direction (`cenc_r1d14b`,
+`cenc_qwen14b`, 150 prompts each, threshold derived offline from the same corrected contrast):
+
+| model | separation | crossed→refuse | never→refuse | late ∧ refusing |
+|---|---|---|---|---|
+| R1-Distill-Qwen-14B | +18.196 | 51/59 (86%) | 16/76 (21%) | **2 / 135 (1.5%)** |
+| Qwen3-14B | +2.667 | 194/226 (86%) | 64/80 (80%) | **1 / 306 (0.33%)** |
+
+Combined **3/441 = 0.68%**. The three late traces: idx 417/739 (`cybercrime_intrusion`), idx
+1473/1572 (`chemical_biological`), idx 651/1649 (`cybercrime_intrusion`).
+
+**So the earlier "0 of 192, the object is absent" is superseded.** The numbers are not formally in
+conflict — 0/192 vs 2/135 is Fisher p≈0.1, and 1.5% sits inside the old 1.56% bound — but the
+qualitative claim moves from *absent* to *thin*, and the legacy probe was not capable of resolving
+the difference (it discriminated 55% vs 27%; the corrected one 86% vs 21%).
+
+Front-loading is unaffected and now confirmed by three independent lines: 205/226 crossings inside
+the first 50 tokens on Qwen3, 53/59 on R1-Distill, per-category medians 8-13 tokens, and the length
+confound reproducing on both (refuse median 485 vs comply 1254; 370 vs 1356).
+
+**Two caveats on the Qwen3 census specifically.** Its base refusal rate is 84% (258 refuse / 48
+comply), so crossing discriminates 86% vs 80% — near-nothing — and separation is only +2.667. With
+that little outcome variance the census is weakly informative regardless of instrument quality.
+And the direction was fit on the *mean of the first 32 generated tokens* but the census thresholds
+on the *per-token peak over the whole trace*; a max over hundreds of positions discards most of what
+made the mean discriminative. That mismatch is a design flaw, and it applies to both models.
+
+**Residual topic confounding.** `harassment_bullying` crossed 7/42 while refusing 37/42;
+`chemical_biological` crossed 91/93. Projection magnitude tracks subject matter, so the corrected
+contrast fixed harmful-vs-benign but not topic-vs-topic.
+
+### What this costs, which is the actual conclusion
+
+At 0.3-1.5% of traces, R1-Distill is the better harvest target despite the weaker instrument:
+
+| target | scan cost |
+|---|---|
+| 20 prefixes (pilot) | ~1,500 prompts ≈ **36 A100-hours** |
+| ~200 prefixes (this program's own power floor) | ~**360 A100-hours** |
+
+A 20-prefix pilot detects only large effects — precisely the position `cc_hub14b` and `cc_strict`
+were in, which is how they produced two uninterpretable nulls. A properly powered test is not
+economically viable.
+
+**The defensible conclusion is therefore not "the object does not exist" but "the object is too rare
+to test at power on any substrate available."** That is stronger than either earlier framing, and it
+is a statement about feasibility rather than about durability.
 
 ## The correction
 
