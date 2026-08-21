@@ -131,14 +131,29 @@ def screen_stage(args):
         run_drift.MODEL = args.model
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    cal = json.loads((out / f"{args.calib}_calib.json").read_text(encoding="utf-8"))
-    if cal["n_refused"] < 5 or cal["separation"] <= 0:
-        sys.exit("calibration unusable; the probe is not measuring refusal on this model.")
-    ft = cal["form_thresh"]
-
     run_drift.TEMP = args.temp          # gen_natural reads the module global, not a kwarg
     model, tok = load_model(args.load_4bit)
-    d = extract_direction(model, tok, args.layer, -1, args.n_extract, args.seed)
+
+    if args.direction_from:
+        # Corrected-contrast direction (harmful-refused vs harmful-complied) from
+        # refusal_direction.py. The legacy calibration's form_thresh belongs to a DIFFERENT
+        # direction -- different scale and possibly different sign -- so it cannot be reused here.
+        # Curves are persisted instead and the threshold is derived offline in census_stage from
+        # the same corrected contrast, which also lets it be re-chosen without regenerating.
+        dd = torch.load(out / f"{args.direction_from}_direction.pt", map_location="cpu")
+        d = dd["directions"][args.direction_locus].float().to(model.device)
+        rep = dd["report"][args.direction_locus]
+        print(f"[dir] {args.direction_from}:{args.direction_locus} "
+              f"auc_cv={rep['auc_cv']:.3f} cos_legacy={rep['cos_legacy']:+.3f}")
+        if not args.census_only and args.form_thresh is None:
+            sys.exit("--direction-from needs --form-thresh to select prefixes, or --census-only")
+        ft = float("inf") if args.form_thresh is None else args.form_thresh
+    else:
+        cal = json.loads((out / f"{args.calib}_calib.json").read_text(encoding="utf-8"))
+        if cal["n_refused"] < 5 or cal["separation"] <= 0:
+            sys.exit("calibration unusable; the probe is not measuring refusal on this model.")
+        ft = cal["form_thresh"]
+        d = extract_direction(model, tok, args.layer, -1, args.n_extract, args.seed)
     think_end_id = run_drift.H.get_think_end_id(tok)
 
     pool = json.loads((DATA / args.pool_file).read_text(encoding="utf-8"))
@@ -149,6 +164,9 @@ def screen_stage(args):
     pf = out / f"{args.run}_prefixes.json"
     sm = out / f"{args.run}_screen_meta.json"
     cen_f = out / f"{args.run}_census.json"
+    cur_f = out / f"{args.run}_curves.json"
+    curves = json.loads(cur_f.read_text(encoding="utf-8")) if (
+        args.resume and args.save_curves and cur_f.exists()) else []
     prefixes = json.loads(pf.read_text(encoding="utf-8")) if (args.resume and pf.exists()) else []
     # One row per SCANNED trace, kept or rejected. Selecting only survivors makes the screen
     # unfalsifiable: cc_strict's 8 prefixes all crossed at token 18-99 and we could not tell
@@ -244,6 +262,12 @@ def screen_stage(args):
             elif args.require_refuse and nat_label != ds.REFUSE:
                 row["reject"] = "nat_not_refuse"
             census.append(row)
+            if args.save_curves:
+                curves.append({"prompt_idx": scanned, "sample": s,
+                               "behavior_id": p.get("behavior_id"),
+                               "category": p.get("category", "_"), "nat_answer_label": nat_label,
+                               "gen_len": int(len(gen)), "think_end_idx": te,
+                               "curve": [round(float(v), 3) for v in curve]})
             if row["reject"]:
                 continue
             prefixes.append({
@@ -260,6 +284,8 @@ def screen_stage(args):
         torch.cuda.empty_cache()
         pf.write_text(json.dumps(prefixes, ensure_ascii=False), encoding="utf-8")
         cen_f.write_text(json.dumps(census, ensure_ascii=False), encoding="utf-8")
+        if args.save_curves:
+            cur_f.write_text(json.dumps(curves, ensure_ascii=False), encoding="utf-8")
         sm.write_text(json.dumps(
             {"scanned": scanned, "n_prefixes": len(prefixes), "stop_reason": stop,
              "form_thresh": ft, "min_frac": args.min_frac, "model": run_drift.MODEL,
@@ -437,6 +463,50 @@ def report_stage(args):
 _BINS = [(0, 50), (50, 100), (100, 200), (200, 500), (500, 10 ** 9)]
 
 
+def _quantile(xs, p):
+    if not xs:
+        return float("nan")
+    s = sorted(xs)
+    return s[min(len(s) - 1, max(0, int(round(p * (len(s) - 1)))))]
+
+
+def rows_from_curves(curves, quant=0.25):
+    """Derive form_thresh from the CORRECTED contrast, then recompute first_cross offline.
+
+    The negative class is harmful-COMPLIED, not benign. Refitting the direction was pointless if
+    the THRESHOLD then reintroduces the same confound: a benign negative class makes 'formed' mean
+    'looks unlike an innocuous prompt', which is what we were trying to stop measuring.
+
+    Deriving this offline also means the threshold can be re-chosen without regenerating anything.
+    """
+    peaks, lims = [], []
+    for c in curves:
+        n = len(c["curve"])
+        lim = n if c["think_end_idx"] is None else min(n, c["think_end_idx"])
+        lims.append(lim)
+        seg = c["curve"][:lim]
+        peaks.append(max(seg) if seg else None)
+    ref = [p for c, p in zip(curves, peaks) if p is not None and c["nat_answer_label"] == ds.REFUSE]
+    com = [p for c, p in zip(curves, peaks) if p is not None and c["nat_answer_label"] == ds.COMPLY]
+    ft = _quantile(ref, quant)
+    sep = _quantile(ref, 0.5) - _quantile(com, 0.5)
+
+    rows = []
+    for c, lim, pk in zip(curves, lims, peaks):
+        fc = None
+        for i in range(lim):
+            if c["curve"][i] >= ft:
+                fc = i
+                break
+        rows.append({"prompt_idx": c["prompt_idx"], "sample": c["sample"],
+                     "behavior_id": c["behavior_id"], "category": c["category"],
+                     "reject": None, "screen_draw_label": None,
+                     "nat_answer_label": c["nat_answer_label"], "first_cross_idx": fc,
+                     "commit_idx": None, "gen_len": c["gen_len"],
+                     "think_end_idx": c["think_end_idx"], "peak": pk, "peak_frac": None})
+    return ft, sep, len(ref), len(com), rows
+
+
 def census_stage(args):
     """Where does refusal intention first cross, and does the trace end up refusing?
 
@@ -448,13 +518,25 @@ def census_stage(args):
     """
     import statistics as st
     out = Path(args.out)
-    rows = json.loads((out / f"{args.run}_census.json").read_text(encoding="utf-8"))
-    scored = [r for r in rows if r["reject"] not in ("screen_draw", "empty_gen")]
-
+    cur_f = out / f"{args.run}_curves.json"
     print(f"\n===== SCREEN CENSUS -- {args.run} =====")
-    print(f"  scanned rows {len(rows)}; with a curve {len(scored)}; "
-          f"skipped at draw 0 {sum(1 for r in rows if r['reject'] == 'screen_draw')}")
-    print(f"  reject reasons: {dict(Counter(r['reject'] or 'KEPT' for r in rows))}")
+    if cur_f.exists():
+        curves = json.loads(cur_f.read_text(encoding="utf-8"))
+        ft, sep, nref, ncom, rows = rows_from_curves(curves, args.thresh_quantile)
+        scored = rows
+        print(f"  threshold derived OFFLINE from the corrected contrast "
+              f"(harmful-refused vs harmful-complied)")
+        print(f"  form_thresh {ft:.3f} at q={args.thresh_quantile} | "
+              f"median separation {sep:+.3f} | refuse {nref} comply {ncom}")
+        if sep <= 0:
+            print("  *** WARNING separation <= 0: this direction does not order refusal above")
+            print("      compliance on these traces. Positions below are not interpretable.")
+    else:
+        rows = json.loads((out / f"{args.run}_census.json").read_text(encoding="utf-8"))
+        scored = [r for r in rows if r["reject"] not in ("screen_draw", "empty_gen")]
+        print(f"  scanned rows {len(rows)}; with a curve {len(scored)}; "
+              f"skipped at draw 0 {sum(1 for r in rows if r['reject'] == 'screen_draw')}")
+        print(f"  reject reasons: {dict(Counter(r['reject'] or 'KEPT' for r in rows))}")
 
     labels = [ds.REFUSE, ds.COMPLY, ds.NONE]
     print(f"\n  first_cross_idx x nat_answer_label (rows with a curve)")
@@ -532,6 +614,22 @@ def main():
                     help="independent draw 0 must refuse before the prompt yields any prefix")
     ap.add_argument("--late-idx", type=int, default=300,
                     help="census: absolute token index above which a crossing counts as LATE")
+    ap.add_argument("--direction-from", default="",
+                    help="use the corrected-contrast direction saved by refusal_direction.py "
+                         "(run name), instead of the legacy Arditi harmful-vs-benign direction")
+    ap.add_argument("--direction-locus", default="gen_early",
+                    choices=["prompt_last", "gen_early", "gen_all"])
+    ap.add_argument("--form-thresh", type=float, default=None,
+                    help="explicit threshold, required with --direction-from unless --census-only")
+    ap.add_argument("--census-only", action="store_true",
+                    help="scan and record curves without harvesting prefixes; the threshold is "
+                         "then derived offline in --stage census")
+    ap.add_argument("--save-curves", action="store_true",
+                    help="persist the per-token curve of every scanned trace so thresholds can be "
+                         "re-derived without regenerating")
+    ap.add_argument("--thresh-quantile", type=float, default=0.25,
+                    help="census: quantile of the refusing-class peak distribution used as "
+                         "form_thresh when curves are available")
     ap.add_argument("--resume", action="store_true")
     a = ap.parse_args()
     {"screen": screen_stage, "continue": continue_stage, "score": score_stage,

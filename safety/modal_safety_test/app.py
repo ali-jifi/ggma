@@ -1974,3 +1974,135 @@ def commitcont(stage: str = "screen", run: str = "cc_r1d14b", calib: str = "pd_m
         {"verdicts": r["verdicts"], "classifier": CLASSIFIER_PATH}, ensure_ascii=False))
     print(f"\nsaved -> {local / (run + '_meta.json')}")
     print(f"rows={len(r['meta_rows'])} judged={len(r['verdicts'])}")
+
+
+# ---------------------------------------------------------------------------
+# Corrected-contrast formation census.
+#
+# The legacy Arditi direction (harmful vs BENIGN) turned out not to be a refusal direction: on
+# Qwen3-14B it is anti-predictive for refusal (AUC 0.36 vs 0.91 for the corrected fit), and on
+# R1-Distill it is only weakly predictive (0.695 vs 0.782). refusal_direction.py refits it on
+# harmful-REFUSED vs harmful-COMPLIED; this runs the per-token census with that direction.
+#
+# The fitted direction ships in the image under safety/drift/directions/ rather than the Volume --
+# it is ~30KB of float16 and travels with the code, so a fresh workspace needs no upload step.
+# Curves are persisted so the threshold is derived offline from the same corrected contrast.
+CENC_DIRS = f"{SAFETY_REMOTE}/drift/directions"
+
+
+def _cenc_args(run, model, direction_from, direction_locus, max_prompts, samples, per_prompt,
+               layer, max_new, gen_timeout, budget_sec, seed, temp, all_categories):
+    import types
+    from pathlib import Path as _P
+    import shutil
+
+    out = _P(PD_OUT)
+    out.mkdir(parents=True, exist_ok=True)
+    # run_commit_continue resolves the direction relative to --out; stage the mounted copy there.
+    src = _P(CENC_DIRS) / f"{direction_from}_direction.pt"
+    if not src.exists():
+        raise FileNotFoundError(
+            f"{src} missing. Commit the fitted direction to safety/drift/directions/ "
+            f"(refusal_direction.py --stage fit writes it next to the states file).")
+    dst = out / f"{direction_from}_direction.pt"
+    if not dst.exists():
+        shutil.copy(str(src), str(dst))
+    return types.SimpleNamespace(
+        run=run, calib="", model=model, pool_file="harmbench_all.json", out=PD_OUT,
+        layer=layer, n_extract=128, min_frac=0.10, max_prompts=max_prompts,
+        max_prefixes=10 ** 6, per_prompt=per_prompt, samples=samples, budget_n=1024,
+        max_new=max_new, max_answer=800, gen_timeout=gen_timeout, budget_sec=budget_sec,
+        seed=seed, temp=temp, batch_size=4, boot=10000, load_4bit=False,
+        all_categories=all_categories, resume=True, screen_draw=True, require_refuse=True,
+        direction_from=direction_from, direction_locus=direction_locus, form_thresh=None,
+        census_only=True, save_curves=True, late_idx=300, thresh_quantile=0.25)
+
+
+@app.function(image=image, gpu="A100-40GB", timeout=21600, retries=0, secrets=[hf_secret],
+              volumes={CACHE_DIR: hf_cache})
+def cenc_run(run: str, model: str = PD_MODEL, direction_from: str = "rdir_r1d14b",
+             direction_locus: str = "gen_early", max_prompts: int = 150, samples: int = 3,
+             per_prompt: int = 2, layer: int = 20, max_new: int = 3000, gen_timeout: int = 300,
+             budget_sec: int = 19800, seed: int = 0, temp: float = 0.6,
+             all_categories: bool = False) -> dict:
+    """Scan prompts, record the per-token refusal curve of every trace, keep no prefixes.
+
+    census_only means nothing is harvested -- the product is the curve set, which is what makes
+    the threshold re-choosable without regenerating. Checkpoints per prompt via on_persist, so a
+    disconnect costs minutes; run under `--stage spawn` so no client owns the input at all.
+    """
+    import sys as _s
+    from pathlib import Path as _P
+
+    _s.path.insert(0, f"{SAFETY_REMOTE}/drift")
+    import run_commit_continue as R
+
+    hf_cache.reload()
+    a = _cenc_args(run, model, direction_from, direction_locus, max_prompts, samples, per_prompt,
+                   layer, max_new, gen_timeout, budget_sec, seed, temp, all_categories)
+    a.on_persist = hf_cache.commit
+    R.screen_stage(a)
+    hf_cache.commit()
+
+    d = _P(PD_OUT)
+    sm = json.loads((d / f"{run}_screen_meta.json").read_text())
+    cur = json.loads((d / f"{run}_curves.json").read_text())
+    ft, sep, nref, ncom, rows = R.rows_from_curves(cur, 0.25)
+    return {"screen_meta": sm, "n_curves": len(cur), "form_thresh": ft, "separation": sep,
+            "n_refuse": nref, "n_comply": ncom,
+            "rows": [{k: v for k, v in r.items() if k != "peak_frac"} for r in rows]}
+
+
+@app.function(image=image, timeout=900, retries=0, volumes={CACHE_DIR: hf_cache})
+def cenc_report(run: str, late_idx: int = 300, thresh_quantile: float = 0.25) -> dict:
+    """CPU reader. Re-derives the threshold offline and prints the cross-tab; text-free."""
+    import sys as _s
+    import types
+    from pathlib import Path as _P
+
+    _s.path.insert(0, f"{SAFETY_REMOTE}/drift")
+    import run_commit_continue as R
+
+    hf_cache.reload()
+    a = types.SimpleNamespace(out=PD_OUT, run=run, late_idx=late_idx,
+                              thresh_quantile=thresh_quantile)
+    R.census_stage(a)
+    cur = json.loads((_P(PD_OUT) / f"{run}_curves.json").read_text())
+    ft, sep, nref, ncom, rows = R.rows_from_curves(cur, thresh_quantile)
+    late = [r for r in rows if r["first_cross_idx"] is not None
+            and r["first_cross_idx"] >= late_idx]
+    return {"n_curves": len(cur), "form_thresh": ft, "separation": sep,
+            "n_refuse": nref, "n_comply": ncom, "n_late": len(late),
+            "n_late_refuse": sum(1 for r in late if r["nat_answer_label"] == "refuse")}
+
+
+@app.local_entrypoint()
+def census(stage: str = "spawn", run: str = "cenc_r1d14b", model: str = PD_MODEL,
+           direction_from: str = "rdir_r1d14b", direction_locus: str = "gen_early",
+           max_prompts: int = 150, samples: int = 3, per_prompt: int = 2, layer: int = 20,
+           max_new: int = 3000, gen_timeout: int = 300, budget_sec: int = 19800,
+           seed: int = 0, temp: float = 0.6, all_categories: bool = False,
+           late_idx: int = 300, out_dir: str = ""):
+    """stage: spawn (submit and exit) | run (block) | report (CPU cross-tab).
+
+    Default is spawn because a streaming client that loses DNS cancels its in-flight input even
+    under --detach, which has already cost this project two multi-hour runs.
+    """
+    kw = dict(run=run, model=model, direction_from=direction_from,
+              direction_locus=direction_locus, max_prompts=max_prompts, samples=samples,
+              per_prompt=per_prompt, layer=layer, max_new=max_new, gen_timeout=gen_timeout,
+              budget_sec=budget_sec, seed=seed, temp=temp, all_categories=all_categories)
+    if stage == "spawn":
+        h = cenc_run.spawn(**kw)
+        print(json.dumps({"spawned": h.object_id, "run": run, "model": model}, indent=2))
+        return
+    if stage == "report":
+        print(json.dumps(cenc_report.remote(run=run, late_idx=late_idx), indent=2))
+        return
+    res = cenc_run.remote(**kw)
+    local = Path(out_dir) if out_dir else REPO_ROOT / "do_not_track" / "drift"
+    local.mkdir(parents=True, exist_ok=True)
+    (local / f"{run}_census_rows.json").write_text(json.dumps(res["rows"]))
+    (local / f"{run}_screen_meta.json").write_text(json.dumps(res["screen_meta"]))
+    print(json.dumps({k: v for k, v in res.items() if k != "rows"}, indent=2))
+    print(f"\nrows={len(res['rows'])} -> {local / (run + '_census_rows.json')}")
