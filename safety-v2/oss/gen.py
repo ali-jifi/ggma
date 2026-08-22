@@ -20,7 +20,7 @@ TEMP, TOP_P = 0.6, 0.95
 
 # ---------------------------------------------------------------- loading
 def load(model_path=MODEL, attn="eager", dtype="auto", device_map="cuda", dequantize=False,
-         max_memory=None, pre_claim=True):
+         max_memory=None, pre_claim=True, headroom_gib=2.0):
     """Load gpt-oss and its tokenizer, asserting the harmony token ids on the way through.
 
     `attn` defaults to eager because SDPA is unsupported on this architecture (attention sinks need
@@ -42,8 +42,13 @@ def load(model_path=MODEL, attn="eager", dtype="auto", device_map="cuda", dequan
     hm.assert_token_ids(tok)
 
     dt = "auto" if dtype == "auto" else getattr(torch, dtype)
-    if pre_claim:
-        reserve(max_memory)
+    if pre_claim and max_memory:
+        # Claim the FULL budget, then hand accelerate a smaller one. max_memory only steers weight
+        # PLACEMENT -- buffers and dispatch push the real footprint past it (measured: 12.92GiB
+        # resident against an 11.5GiB cap), so the claim has to cover the overshoot or the load
+        # dies at dispatch with the card already full.
+        reserve(max_memory, slack_gib=0.0)
+        max_memory = _shrink(max_memory, headroom_gib)
     kw = {"device_map": device_map, "attn_implementation": attn}
     if max_memory:
         # Shared boxes: device_map="auto" fills card 0 before spilling, so a neighbour
@@ -77,6 +82,18 @@ def _bytes(spec):
         if s.endswith(suffix):
             return int(float(s[: -len(suffix)]) * mult)
     return int(float(s))
+
+
+def _shrink(max_memory, gib):
+    """Lower each per-device cap, leaving room for what accelerate places beyond it."""
+    out = {}
+    for dev, cap in max_memory.items():
+        if isinstance(dev, int):
+            n = max(0, _bytes(cap) - int(gib * (1 << 30)))
+            out[dev] = f"{n // (1 << 20)}MiB"
+        else:
+            out[dev] = cap
+    return out
 
 
 def reserve(max_memory, slack_gib=1.0):

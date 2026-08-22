@@ -19,6 +19,7 @@
 # NEED      total free MiB required across the chosen cards (default 50000)
 # MINCARD   ignore cards with less than this free, so the model is not smeared over scraps
 # RESERVE   MiB left unclaimed on each card, as headroom for the neighbour and for KV cache
+# CAP       max MiB claimed per card, so the model spreads instead of filling one to the brim
 # POLL      seconds between checks
 # RETRIES   attempts before giving up; a lost race is normal on a busy box
 set -euo pipefail
@@ -27,10 +28,17 @@ REPO="${REPO:-$HOME/ggma}"
 ALLOW="${ALLOW:-4,5}"
 NEED="${NEED:-50000}"
 MINCARD="${MINCARD:-6000}"
-RESERVE="${RESERVE:-2500}"
+RESERVE="${RESERVE:-4000}"
+CAP="${CAP:-13000}"
 POLL="${POLL:-60}"
 RETRIES="${RETRIES:-6}"
 cd "$REPO"
+
+# One pre-claimed block gets carved up during a 48GB load and the holes left behind are too small
+# for the next request: a failure here showed 3.65GiB reserved-but-unallocated in our own process
+# while a 1014MiB allocation OOM'd. Expandable segments let the allocator grow and reshape one
+# virtual segment per device instead of stranding memory it already owns.
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
 PY="$REPO/.venv/bin/python"
 [ -x "$PY" ] || { echo "no interpreter at $PY"; exit 1; }
@@ -44,6 +52,7 @@ pick() {
     case ",$ALLOW," in *",$idx,"*) ;; *) continue ;; esac
     [ "$free" -ge "$MINCARD" ] || continue
     local usable=$((free - RESERVE))
+    [ "$usable" -gt "$CAP" ] && usable="$CAP"
     [ "$usable" -gt 0 ] || continue
     dev="${dev}${dev:+,}${idx}"
     mm="${mm}${mm:+,}${i}:${usable}MiB"
