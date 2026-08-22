@@ -40,6 +40,18 @@ import locus_stats as LS
 CUTS = (0, 32, 64, 128, 256, 512, 1024, 2048)
 
 
+def _max_memory(args):
+    """--max-memory "0:20GiB,1:38GiB" -> {0: "20GiB", 1: "38GiB"}. None when unset."""
+    if not args.max_memory:
+        return None
+    out = {}
+    for part in args.max_memory.split(","):
+        k, v = part.split(":", 1)
+        k = k.strip()
+        out[int(k) if k.isdigit() else k] = v.strip()
+    return out
+
+
 def _p(args, name):
     return _paths.OUT / f"{args.run}_{name}.json"
 
@@ -84,7 +96,8 @@ def _row(prompt, pi, sample, rec, prof, **extra):
 def screen_stage(args):
     t0 = time.time()
     model, tok = G.load(args.model, attn=args.attn, dtype=args.dtype,
-                        device_map=args.device_map, dequantize=(args.dtype != "auto"))
+                        device_map=args.device_map, max_memory=_max_memory(args),
+                        dequantize=(args.dtype != "auto"))
     ids_cache = G.id_cache(tok)
     pool = _pool(args)
 
@@ -173,7 +186,8 @@ def clip_stage(args):
     if not kept:
         sys.exit("no kept prompts; run --stage screen first.")
     model, tok = G.load(args.model, attn=args.attn, dtype=args.dtype,
-                        device_map=args.device_map, dequantize=(args.dtype != "auto"))
+                        device_map=args.device_map, max_memory=_max_memory(args),
+                        dequantize=(args.dtype != "auto"))
     ids_cache = G.id_cache(tok)
     cuts = [int(c) for c in args.cuts.split(",") if c.strip()]
 
@@ -338,6 +352,9 @@ def _parser():
     ap.add_argument("--date", default="2026-08-21")
     ap.add_argument("--dtype", default="bfloat16", choices=["auto", "bfloat16"])
     ap.add_argument("--attn", default="eager")
+    ap.add_argument("--max-memory", default="",
+                    help="per-device cap, e.g. 0:20GiB,1:38GiB -- needed on a shared box "
+                         "where another job already holds part of card 0")
     ap.add_argument("--device-map", default="auto",
                     help="auto shards bf16 (~48GB) across several cards; a single 40GB "
                          "GPU cannot hold it, and 'cuda' would OOM rather than shard")

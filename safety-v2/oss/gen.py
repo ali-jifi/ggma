@@ -19,7 +19,8 @@ TEMP, TOP_P = 0.6, 0.95
 
 
 # ---------------------------------------------------------------- loading
-def load(model_path=MODEL, attn="eager", dtype="auto", device_map="cuda", dequantize=False):
+def load(model_path=MODEL, attn="eager", dtype="auto", device_map="cuda", dequantize=False,
+         max_memory=None):
     """Load gpt-oss and its tokenizer, asserting the harmony token ids on the way through.
 
     `attn` defaults to eager because SDPA is unsupported on this architecture (attention sinks need
@@ -42,6 +43,10 @@ def load(model_path=MODEL, attn="eager", dtype="auto", device_map="cuda", dequan
 
     dt = "auto" if dtype == "auto" else getattr(torch, dtype)
     kw = {"device_map": device_map, "attn_implementation": attn}
+    if max_memory:
+        # Shared boxes: device_map="auto" fills card 0 before spilling, so a neighbour
+        # holding 16GB there OOMs a load that would otherwise fit across two cards.
+        kw["max_memory"] = max_memory
     if dequantize:
         try:
             from transformers import Mxfp4Config
