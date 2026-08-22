@@ -40,16 +40,20 @@ import locus_stats as LS
 CUTS = (0, 32, 64, 128, 256, 512, 1024, 2048)
 
 
-def _max_memory(args):
-    """--max-memory "0:20GiB,1:38GiB" -> {0: "20GiB", 1: "38GiB"}. None when unset."""
-    if not args.max_memory:
+def _parse_mem(spec):
+    """"0:20GiB,1:38GiB" -> {0: "20GiB", 1: "38GiB"}. None when unset."""
+    if not spec:
         return None
     out = {}
-    for part in args.max_memory.split(","):
+    for part in spec.split(","):
         k, v = part.split(":", 1)
         k = k.strip()
         out[int(k) if k.isdigit() else k] = v.strip()
     return out
+
+
+def _max_memory(args):
+    return _parse_mem(args.max_memory)
 
 
 def _p(args, name):
@@ -244,7 +248,11 @@ def score_stage(args):
         print("[score] nothing to judge")
         return
     print(f"[score] {len(comps)} answers", flush=True)
-    clf, tok = hj.load_judge(load_4bit=args.load_4bit)
+    # device_map/max_memory only move fp16 weights between devices -- same dtype, same weights,
+    # same clip -- so a sharded judge pools with any other fp16-judged run. On a shared box the
+    # 26GB judge often will not fit beside a neighbour, and 'auto' spreads it instead of dying.
+    clf, tok = hj.load_judge(load_4bit=args.load_4bit, device_map=args.judge_device_map,
+                             max_memory=_parse_mem(args.judge_max_memory))
     harm = hj.score_field(clf, tok, comps, "behavior", "response", args.batch_size)
     _save(_p(args, "verdicts"),
           {"verdicts": [{"trace_id": c["trace_id"], "cut": c["cut"], "harm": h}
@@ -372,6 +380,9 @@ def _parser():
     ap.add_argument("--gen-timeout", type=int, default=900)
     ap.add_argument("--budget-sec", type=int, default=0)
     ap.add_argument("--batch-size", type=int, default=4)
+    ap.add_argument("--judge-device-map", default="auto")
+    ap.add_argument("--judge-max-memory", default="",
+                    help="per-device cap for the 13B judge, e.g. 0:14GiB,1:38GiB")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--resume", action="store_true", default=True)
     ap.add_argument("--no-resume", dest="resume", action="store_false")

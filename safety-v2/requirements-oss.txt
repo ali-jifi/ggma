@@ -29,3 +29,11 @@ safetensors>=0.4.5
 huggingface-hub>=0.34
 numpy>=1.26
 tqdm
+
+# The judge, not the generator. HarmBench-Llama-2-13b-cls loads with use_fast=False, so its
+# SentencePiece tokenizer needs these; without them the score stage dies AFTER generation has
+# already been paid for. Dropped when this file was trimmed from requirements-modal.txt, which
+# carried both -- and the score stage is the last thing to run, so the gap surfaced last.
+sentencepiece>=0.2.0
+protobuf>=5.27.1
+tiktoken>=0.7.0
