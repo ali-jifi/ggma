@@ -105,6 +105,13 @@ def screen_stage(args):
         if args.budget_sec and (time.time() - t0) > args.budget_sec:
             stop = "budget_sec"
             break
+        if args.sanity_after and scanned >= args.sanity_after and not kept:
+            stop = "sanity_zero_kept"
+            print(f"[screen] ABORT: {scanned} prompts, ZERO kept. A screen that keeps nothing is "
+                  f"far more likely to be a detector fault than a model that never refuses -- "
+                  f"check the label distribution against `analysis_refusal` before rerunning.",
+                  flush=True)
+            break
         pi = scanned
         scanned += 1
         pids = hm.build_ids(tok, prompt["instruction"], effort=args.effort, date=args.date,
@@ -121,20 +128,22 @@ def screen_stage(args):
                          "analysis_start": rec["analysis_start"],
                          "analysis_tokens": rec["analysis_tokens"], "text": rec["text"]})
         d = LS.screen_prompt(labels, args.min_refuse)
+        # Persisted for EVERY prompt, not only the kept ones. The first screen kept nothing and
+        # therefore stored nothing, so a detector fault could not be diagnosed without 82 minutes
+        # of regeneration -- the standing rule is to persist the CoT on every generation run.
+        traces[str(pi)] = here
         if d["keep"]:
             kept.append({"prompt_idx": pi, "behavior_id": prompt.get("behavior_id"),
                          "category": prompt.get("category", "_"),
                          "request": prompt["instruction"], "p_refuse": d["p_refuse"],
                          "contested": d["contested"]})
-            traces[str(pi)] = here
         for r in rows[-args.samples:]:
             r["screen"] = d["reason"]
             r["p_refuse"] = d["p_refuse"]
 
         _save(_p(args, "screen"), rows)
         _save(_p(args, "kept"), kept)
-        if d["keep"]:
-            _save(_p(args, "traces"), traces)
+        _save(_p(args, "traces"), traces)
         _save(_p(args, "screen_meta"),
               {"scanned": scanned, "n_kept": len(kept), "stop_reason": stop,
                "model": args.model, "dtype": args.dtype, "attn": args.attn, "temp": args.temp,
@@ -337,6 +346,8 @@ def _parser():
     ap.add_argument("--max-prompts", type=int, default=120)
     ap.add_argument("--max-kept", type=int, default=40)
     ap.add_argument("--min-refuse", type=float, default=0.5)
+    ap.add_argument("--sanity-after", type=int, default=20,
+                    help="abort if this many prompts yield zero kept; 0 disables")
     ap.add_argument("--temp", type=float, default=0.9)
     ap.add_argument("--top-p", type=float, default=0.95)
     ap.add_argument("--max-new", type=int, default=8000)
