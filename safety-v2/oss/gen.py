@@ -1,9 +1,9 @@
 """Generation primitives for gpt-oss. The harmony analogues of run_drift's `</think>` primitives.
 
-Stage 0 needs exactly two: natural generation, and the clip (truncate the analysis at k tokens,
-force the answer). Suppression forcing and Wait-injection are Stage 4 objects and are deliberately
-NOT written yet — they would be untested code shipped ahead of the gate that decides whether they
-are ever needed.
+Three primitives. `gen_natural` and `gen_clip` (truncate the analysis at k tokens, force the answer)
+serve the formation-locus sweep. `gen_force` adds suppression forcing and Wait-injection, written
+only once the locus result showed refusal is already at 0.99 by 32 analysis tokens — which is what
+makes a forced continuation act on a commitment that has demonstrably formed.
 
 Every function returns token ids alongside text: the CoT is persisted in token space, because
 numeric residue alone already cost this program one central claim.
@@ -20,7 +20,7 @@ TEMP, TOP_P = 0.6, 0.95
 
 # ---------------------------------------------------------------- loading
 def load(model_path=MODEL, attn="eager", dtype="auto", device_map="cuda", dequantize=False,
-         max_memory=None):
+         max_memory=None, pre_claim=True):
     """Load gpt-oss and its tokenizer, asserting the harmony token ids on the way through.
 
     `attn` defaults to eager because SDPA is unsupported on this architecture (attention sinks need
@@ -42,6 +42,8 @@ def load(model_path=MODEL, attn="eager", dtype="auto", device_map="cuda", dequan
     hm.assert_token_ids(tok)
 
     dt = "auto" if dtype == "auto" else getattr(torch, dtype)
+    if pre_claim:
+        reserve(max_memory)
     kw = {"device_map": device_map, "attn_implementation": attn}
     if max_memory:
         # Shared boxes: device_map="auto" fills card 0 before spilling, so a neighbour
@@ -66,6 +68,47 @@ def load(model_path=MODEL, attn="eager", dtype="auto", device_map="cuda", dequan
           f"{ev['allocated_gb']:.1f}GB, quant={ev['quant_method']}, "
           f"mxfp4_modules={ev['mxfp4_modules']}", flush=True)
     return model, tok
+
+
+def _bytes(spec):
+    """'21553MiB' / '38GiB' / '12000000000' -> bytes."""
+    s = str(spec).strip()
+    for suffix, mult in (("GiB", 1 << 30), ("MiB", 1 << 20), ("GB", 10 ** 9), ("MB", 10 ** 6)):
+        if s.endswith(suffix):
+            return int(float(s[: -len(suffix)]) * mult)
+    return int(float(s))
+
+
+def reserve(max_memory, slack_gib=1.0):
+    """Claim each card's budget BEFORE loading, so a neighbour cannot take it mid-load.
+
+    Loading 48GB across shared cards takes over a minute, and on a busy box the free memory the
+    launcher saw at pick time is gone by the time the weights arrive -- one run here died with a
+    neighbour taking 25.6GB of a chosen card while the load was 68% done. PyTorch's caching
+    allocator keeps freed blocks reserved to THIS process, so allocating a block and immediately
+    releasing it leaves the memory ours for the load that follows.
+    """
+    import torch
+    if not max_memory or not torch.cuda.is_available():
+        return {}
+    got = {}
+    for dev, cap in max_memory.items():
+        if not isinstance(dev, int):
+            continue
+        n = _bytes(cap) - int(slack_gib * (1 << 30))
+        if n <= 0:
+            continue
+        try:
+            t = torch.empty(n, dtype=torch.uint8, device=f"cuda:{dev}")
+            del t
+            got[dev] = n
+        except Exception as e:
+            print(f"[load] could not pre-claim {cap} on cuda:{dev} ({type(e).__name__}) -- "
+                  f"another job took it between the launcher's check and now", flush=True)
+    if got:
+        print("[load] pre-claimed " + ", ".join(f"cuda:{d} {n / (1 << 30):.1f}GiB"
+                                                for d, n in sorted(got.items())), flush=True)
+    return got
 
 
 def mxfp4_evidence(model):

@@ -20,6 +20,7 @@
 # MINCARD   ignore cards with less than this free, so the model is not smeared over scraps
 # RESERVE   MiB left unclaimed on each card, as headroom for the neighbour and for KV cache
 # POLL      seconds between checks
+# RETRIES   attempts before giving up; a lost race is normal on a busy box
 set -euo pipefail
 
 REPO="${REPO:-$HOME/ggma}"
@@ -28,6 +29,7 @@ NEED="${NEED:-50000}"
 MINCARD="${MINCARD:-6000}"
 RESERVE="${RESERVE:-2500}"
 POLL="${POLL:-60}"
+RETRIES="${RETRIES:-6}"
 cd "$REPO"
 
 PY="$REPO/.venv/bin/python"
@@ -53,14 +55,27 @@ pick() {
   printf '%s|%s|%s\n' "$dev" "$mm" "$total"
 }
 
+ATTEMPT=0
 while :; do
   if SEL="$(pick)"; then
     DEV="${SEL%%|*}"; REST="${SEL#*|}"; MM="${REST%%|*}"; TOT="${REST##*|}"
-    echo "$(date +%H:%M:%S) launching on GPUs [$DEV] with ${TOT}MiB usable -- caps $MM"
+    ATTEMPT=$((ATTEMPT + 1))
+    echo "$(date +%H:%M:%S) attempt $ATTEMPT on GPUs [$DEV] with ${TOT}MiB usable -- caps $MM"
     export CUDA_VISIBLE_DEVICES="$DEV"
     export OSS_MAXMEM="$MM"
-    exec "$@"
+    # Not exec: losing the race to a neighbour that grows during the ~75s load is the common
+    # failure here, and every stage resumes from its checkpoint, so retrying costs minutes.
+    if "$@"; then
+      echo "$(date +%H:%M:%S) done"
+      exit 0
+    fi
+    if [ "$ATTEMPT" -ge "$RETRIES" ]; then
+      echo "$(date +%H:%M:%S) giving up after $ATTEMPT attempts"
+      exit 1
+    fi
+    echo "$(date +%H:%M:%S) attempt $ATTEMPT failed; re-picking in ${POLL}s"
+  else
+    echo "$(date +%H:%M:%S) waiting for ${NEED}MiB across [$ALLOW] (min ${MINCARD}/card, reserving ${RESERVE})"
   fi
-  echo "$(date +%H:%M:%S) waiting for ${NEED}MiB across [$ALLOW] (min ${MINCARD}/card, reserving ${RESERVE})"
   sleep "$POLL"
 done
