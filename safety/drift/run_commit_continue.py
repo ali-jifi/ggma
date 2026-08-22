@@ -470,7 +470,31 @@ def _quantile(xs, p):
     return s[min(len(s) - 1, max(0, int(round(p * (len(s) - 1)))))]
 
 
-def rows_from_curves(curves, quant=0.25):
+def smooth_curve(xs, w):
+    """Trailing mean over a FULL window of w tokens; positions before the first full window are
+    not scoreable.
+
+    The direction is fit on the mean of the first 32 generated tokens, but the census thresholded on
+    the raw per-token peak -- a max over hundreds of positions, which discards most of what made the
+    mean discriminative and is dominated by single-token spikes. Requiring a full window also means
+    a spike at token 0 cannot register as formation, which is the failure mode that made 57% of all
+    traces peak in the first 3% of generation.
+
+    Index i means "the window ENDING at i crossed", so crossings sit ~w tokens later than the raw
+    statistic would place them. Irrelevant at w=32 against a 300-token late cut.
+    """
+    if w <= 1:
+        return list(xs)
+    out, s = [], 0.0
+    for i, x in enumerate(xs):
+        s += x
+        if i >= w:
+            s -= xs[i - w]
+        out.append(s / w if i >= w - 1 else float("-inf"))
+    return out
+
+
+def rows_from_curves(curves, quant=0.25, smooth=1):
     """Derive form_thresh from the CORRECTED contrast, then recompute first_cross offline.
 
     The negative class is harmful-COMPLIED, not benign. Refitting the direction was pointless if
@@ -479,12 +503,14 @@ def rows_from_curves(curves, quant=0.25):
 
     Deriving this offline also means the threshold can be re-chosen without regenerating anything.
     """
-    peaks, lims = [], []
+    peaks, lims, sm = [], [], []
     for c in curves:
         n = len(c["curve"])
         lim = n if c["think_end_idx"] is None else min(n, c["think_end_idx"])
         lims.append(lim)
-        seg = c["curve"][:lim]
+        s = smooth_curve(c["curve"], smooth)
+        sm.append(s)
+        seg = [v for v in s[:lim] if v != float("-inf")]
         peaks.append(max(seg) if seg else None)
     ref = [p for c, p in zip(curves, peaks) if p is not None and c["nat_answer_label"] == ds.REFUSE]
     com = [p for c, p in zip(curves, peaks) if p is not None and c["nat_answer_label"] == ds.COMPLY]
@@ -492,10 +518,10 @@ def rows_from_curves(curves, quant=0.25):
     sep = _quantile(ref, 0.5) - _quantile(com, 0.5)
 
     rows = []
-    for c, lim, pk in zip(curves, lims, peaks):
+    for c, lim, pk, s in zip(curves, lims, peaks, sm):
         fc = None
         for i in range(lim):
-            if c["curve"][i] >= ft:
+            if s[i] != float("-inf") and s[i] >= ft:
                 fc = i
                 break
         rows.append({"prompt_idx": c["prompt_idx"], "sample": c["sample"],
@@ -522,10 +548,13 @@ def census_stage(args):
     print(f"\n===== SCREEN CENSUS -- {args.run} =====")
     if cur_f.exists():
         curves = json.loads(cur_f.read_text(encoding="utf-8"))
-        ft, sep, nref, ncom, rows = rows_from_curves(curves, args.thresh_quantile)
+        ft, sep, nref, ncom, rows = rows_from_curves(curves, args.thresh_quantile, args.smooth)
         scored = rows
         print(f"  threshold derived OFFLINE from the corrected contrast "
               f"(harmful-refused vs harmful-complied)")
+        stat = ("raw per-token peak" if args.smooth <= 1
+                else "trailing mean over %d tokens" % args.smooth)
+        print(f"  statistic: {stat}")
         print(f"  form_thresh {ft:.3f} at q={args.thresh_quantile} | "
               f"median separation {sep:+.3f} | refuse {nref} comply {ncom}")
         if sep <= 0:
@@ -627,6 +656,10 @@ def main():
     ap.add_argument("--save-curves", action="store_true",
                     help="persist the per-token curve of every scanned trace so thresholds can be "
                          "re-derived without regenerating")
+    ap.add_argument("--smooth", type=int, default=1,
+                    help="census: threshold on a trailing mean over this many tokens instead of "
+                         "the raw per-token value. 32 matches how the direction was fit; 1 "
+                         "reproduces the original peak-based numbers")
     ap.add_argument("--thresh-quantile", type=float, default=0.25,
                     help="census: quantile of the refusing-class peak distribution used as "
                          "form_thresh when curves are available")

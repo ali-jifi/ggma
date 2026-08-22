@@ -2054,7 +2054,8 @@ def cenc_run(run: str, model: str = PD_MODEL, direction_from: str = "rdir_r1d14b
 
 
 @app.function(image=image, timeout=900, retries=0, volumes={CACHE_DIR: hf_cache})
-def cenc_report(run: str, late_idx: int = 300, thresh_quantile: float = 0.25) -> dict:
+def cenc_report(run: str, late_idx: int = 300, thresh_quantile: float = 0.25,
+                smooth: int = 1) -> dict:
     """CPU reader. Re-derives the threshold offline and prints the cross-tab; text-free."""
     import sys as _s
     import types
@@ -2065,13 +2066,13 @@ def cenc_report(run: str, late_idx: int = 300, thresh_quantile: float = 0.25) ->
 
     hf_cache.reload()
     a = types.SimpleNamespace(out=PD_OUT, run=run, late_idx=late_idx,
-                              thresh_quantile=thresh_quantile)
+                              thresh_quantile=thresh_quantile, smooth=smooth)
     R.census_stage(a)
     cur = json.loads((_P(PD_OUT) / f"{run}_curves.json").read_text())
-    ft, sep, nref, ncom, rows = R.rows_from_curves(cur, thresh_quantile)
+    ft, sep, nref, ncom, rows = R.rows_from_curves(cur, thresh_quantile, smooth)
     late = [r for r in rows if r["first_cross_idx"] is not None
             and r["first_cross_idx"] >= late_idx]
-    return {"n_curves": len(cur), "form_thresh": ft, "separation": sep,
+    return {"n_curves": len(cur), "smooth": smooth, "form_thresh": ft, "separation": sep,
             "n_refuse": nref, "n_comply": ncom, "n_late": len(late),
             "n_late_refuse": sum(1 for r in late if r["nat_answer_label"] == "refuse")}
 
@@ -2082,7 +2083,7 @@ def census(stage: str = "spawn", run: str = "cenc_r1d14b", model: str = PD_MODEL
            max_prompts: int = 150, samples: int = 3, per_prompt: int = 2, layer: int = 20,
            max_new: int = 3000, gen_timeout: int = 300, budget_sec: int = 19800,
            seed: int = 0, temp: float = 0.6, all_categories: bool = False,
-           late_idx: int = 300, out_dir: str = ""):
+           late_idx: int = 300, smooth: int = 1, out_dir: str = ""):
     """stage: spawn (submit and exit) | run (block) | report (CPU cross-tab).
 
     Default is spawn because a streaming client that loses DNS cancels its in-flight input even
@@ -2097,7 +2098,8 @@ def census(stage: str = "spawn", run: str = "cenc_r1d14b", model: str = PD_MODEL
         print(json.dumps({"spawned": h.object_id, "run": run, "model": model}, indent=2))
         return
     if stage == "report":
-        print(json.dumps(cenc_report.remote(run=run, late_idx=late_idx), indent=2))
+        print(json.dumps(cenc_report.remote(run=run, late_idx=late_idx, smooth=smooth),
+                         indent=2))
         return
     res = cenc_run.remote(**kw)
     local = Path(out_dir) if out_dir else REPO_ROOT / "do_not_track" / "drift"

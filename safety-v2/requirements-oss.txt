@@ -1,0 +1,31 @@
+# Remote (in-container) deps for safety-v2 on Modal: gpt-oss-20b in the harmony format.
+#
+# These are FLOORS, not pins. Freeze the resolved versions here after the first green
+# oss_preflight run -- it records them in its JSON report -- rather than guessing them now.
+#
+# Why each floor:
+#   transformers >= 4.55  GptOssForCausalLM does not exist before it; 4.51.3 (the safety/ pin)
+#                         cannot load this architecture at all.
+#   triton >= 3.4 + kernels
+#                         MXFP4 inference. Requires a GPU of compute capability >= 9.0
+#                         (H100 / B200 / RTX 50xx). Without them transformers dequantizes the
+#                         MoE weights to bf16: ~48 GB resident and roughly 3x the cost. That
+#                         path still RUNS on an 80GB card, which is why preflight asserts on
+#                         resident memory rather than trusting the load to fail.
+#   torch >= 2.8          ships the triton 3.4 line.
+#
+# Note this tree does NOT install the safety/ stack: it imports only drift_screen (torch-free)
+# and harm_judge, and the judge stage runs in its own call with no generator loaded.
+# FROZEN 2026-08-21 from the first green preflight (oss_preflight_cpu/gpu, H100, MXFP4 confirmed
+# live at 13.8GB resident with 24 mxfp4 modules). Note transformers resolved to the 5.x line, not
+# the 4.5x the floors were written for; it works, and it is pinned so a later resolve cannot move
+# it mid-study. torch is pinned without the +cu130 local suffix, which is the default linux wheel.
+torch==2.13.0
+transformers==5.15.1
+triton==3.7.1
+kernels
+accelerate==1.14.0
+safetensors>=0.4.5
+huggingface-hub>=0.34
+numpy>=1.26
+tqdm

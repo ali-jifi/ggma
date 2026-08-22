@@ -284,22 +284,65 @@ made the mean discriminative. That mismatch is a design flaw, and it applies to 
 `chemical_biological` crossed 91/93. Projection magnitude tracks subject matter, so the corrected
 contrast fixed harmful-vs-benign but not topic-vs-topic.
 
+### Fixing the statistic mismatch — more late crossings, but they are probably not real
+
+The direction is fit on the mean of the first 32 generated tokens; the census thresholded on the raw
+per-token peak. `--smooth 32` thresholds a trailing mean over a full 32-token window instead, which
+also makes a single-token spike at position 0 structurally incapable of registering as formation.
+
+Discrimination did not change:
+
+| model | crossed -> refuse | never -> refuse |
+|---|---|---|
+| R1-Distill raw / smoothed | 86% / 84% | 21% / 22% |
+| Qwen3-14B raw / smoothed | 86% / 86% | 80% / 80% |
+
+The late count did: **3/441 -> 8/441, 0.68% -> 1.81%**. R1-Distill 3/135, Qwen3-14B 5/306.
+
+**But the new late crossings are not enriched for refusal, which argues most of them are noise.**
+Late crossers refuse BELOW base rate on both models — R1-Distill 3 of 8 (38%) against a 50% base,
+Qwen3-14B 5 of 7 (71%) against an 84% base. If late crossing marked a refusal forming mid-chain,
+late crossers should refuse MORE than baseline, not less.
+
+The likely mechanism is length. Crossing at >=300 requires a trace of >=300 tokens, and complying
+traces run 3-4x longer (median 1356 vs 370). More positions means more chances for a threshold to be
+crossed by noise, so the late cell is partly a length artifact — the same confound that killed
+`commit_frac`, resurfacing in a different place.
+
+**Take the true rate as somewhere between 0.7% and 1.8%, with the upper end unverified.**
+
 ### What this costs, which is the actual conclusion
 
-At 0.3-1.5% of traces, R1-Distill is the better harvest target despite the weaker instrument:
+Qwen3-14B is the cheaper harvest target, because its high base refusal rate means far more prompts
+survive the draw-0 screen: 2.04 curves per prompt against R1-Distill's 0.90.
 
-| target | scan cost |
-|---|---|
-| 20 prefixes (pilot) | ~1,500 prompts ≈ **36 A100-hours** |
-| ~200 prefixes (this program's own power floor) | ~**360 A100-hours** |
+| target | model | scan | cost |
+|---|---|---|---|
+| 20 prefixes (pilot) | Qwen3-14B | ~600 prompts | ~14 A100-h |
+| 20 prefixes | R1-Distill | ~1,000 prompts | ~24 A100-h |
+| ~200 prefixes (this program's power floor) | Qwen3-14B | ~6,000 prompts | ~143 A100-h |
 
-A 20-prefix pilot detects only large effects — precisely the position `cc_hub14b` and `cc_strict`
-were in, which is how they produced two uninterpretable nulls. A properly powered test is not
-economically viable.
+Those figures use the optimistic 1.8% rate. At 0.7% they roughly triple. A 20-prefix pilot detects
+only large effects — precisely the position `cc_hub14b` and `cc_strict` were in, which is how they
+produced two uninterpretable nulls.
 
-**The defensible conclusion is therefore not "the object does not exist" but "the object is too rare
-to test at power on any substrate available."** That is stronger than either earlier framing, and it
-is a statement about feasibility rather than about durability.
+**The defensible conclusion is not "the object does not exist" but "the object is rare, its measured
+rate is instrument-dependent between 0.7% and 1.8%, and the upper estimate is not enriched for
+refusal."** That is a statement about feasibility and measurement, not about durability.
+
+### The cheap test that would settle it — designed, not run
+
+All 8 late traces are identified by prompt index and sample, and generation is deterministically
+seeded (`seed*100000 + prompt*131 + sample`), so they can be reproduced exactly, cut at their
+crossing points, and run through **C0 only** with several samples each. Roughly one GPU-hour.
+
+- C0 refuses at near-100% -> the prefix carries a genuinely formed commitment, the harvest premise
+  holds, and the pilot is justified.
+- C0 refuses near base rate -> the crossing was threshold noise, the late cell dissolves, and the
+  erosion programme is closed on this substrate for about a dollar rather than thirty-five.
+
+This is the highest-value remaining experiment in the programme, and it is also the cheapest. Do it
+before spending anything on a harvest.
 
 ## The correction
 
