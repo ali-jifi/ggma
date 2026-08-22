@@ -142,6 +142,109 @@ def gen_natural(model, tok, prompt_ids, ids_cache, max_new, seed,
     return _record(tok, prompt_ids.shape[1], out, ids_cache, t0)
 
 
+def _suppress_until(token_ids, until):
+    """Ban `token_ids` for the first `until` decode steps, so the model CANNOT end its analysis.
+
+    Mirrors harness._SuppressUntil, reimplemented here for the same reason as _time_stop: that
+    module fixes the `</think>` format at import.
+    """
+    from transformers import LogitsProcessor
+
+    class _S(LogitsProcessor):
+        def __init__(self):
+            self.step = 0
+
+        def __call__(self, input_ids, scores):
+            if self.step < until:
+                for t in token_ids:
+                    scores[:, t] = -float("inf")
+            self.step += 1
+            return scores
+
+    return [_S()]
+
+
+def _prefix(prompt_ids, body, k, ids_cache):
+    import torch
+    b = [int(x) for x in list(body)[:k]]
+    pre = torch.tensor([ids_cache["open"] + b], dtype=prompt_ids.dtype, device=prompt_ids.device)
+    return torch.cat([prompt_ids, pre], dim=1), len(b)
+
+
+def _release(model, tok, seq, ids_cache, max_answer, temp, top_p, stop):
+    """Close the analysis, open the final channel, and let it answer."""
+    import torch
+    hdr = torch.tensor([ids_cache["header"]], dtype=seq.dtype, device=seq.device)
+    return model.generate(torch.cat([seq, hdr], dim=1), max_new_tokens=max_answer, do_sample=True,
+                          temperature=temp, top_p=top_p, eos_token_id=ids_cache["stops"],
+                          pad_token_id=tok.pad_token_id, stopping_criteria=stop)
+
+
+def gen_force(model, tok, prompt_ids, analysis_body, cut, budget, ids_cache, max_answer, seed,
+              temp=TEMP, top_p=TOP_P, gen_timeout=None, mode="budget", wait_text="\nWait,",
+              max_injections=24):
+    """Continue a formed refusal under forced OVERTHINKING, then make it answer.
+
+    The prefix is the first `cut` tokens of a natural analysis -- on this model refusal is already
+    at 0.99 by 32 tokens, so the commitment is in the KV cache as a fact, identical across arms.
+    From there:
+
+      mode="natural"  continue and stop whenever it likes. THE CONTROL. Without it a flip under
+                      forcing is uninterpretable, because prefixes flip on their own -- the entire
+                      lesson of the commitment-continuation run, where the forcing effect vanished
+                      once the natural baseline was finally measured.
+      mode="budget"   suppression forcing: <|end|>/<|return|>/<|call|> are banned until the analysis
+                      reaches `budget` tokens, so it cannot stop reasoning.
+      mode="wait"     every time it tries to close the analysis, drop the <|end|> and inject "Wait,"
+                      -- reconsideration rather than padding, to `budget` tokens.
+
+    Degeneracy is the thing to watch: forcing a model that wants ~137 tokens out to thousands is
+    exactly the regime where earlier substrates produced filler, and filler is not overthinking.
+    """
+    import torch
+    t0 = time.time()
+    torch.manual_seed(seed)
+    stop = _time_stop(gen_timeout)
+    seq, n_pre = _prefix(prompt_ids, analysis_body, cut, ids_cache)
+    start = prompt_ids.shape[1]
+    banned = [ids_cache["end"]] + list(ids_cache["stops"])
+    injected = 0
+
+    if mode == "natural":
+        out = model.generate(seq, max_new_tokens=budget, do_sample=True, temperature=temp,
+                             top_p=top_p, eos_token_id=ids_cache["stops"],
+                             pad_token_id=tok.pad_token_id, stopping_criteria=stop)
+        # It may have answered on its own; only force a release if it never opened `final`.
+        if hm.FINAL_OPEN not in tok.decode(out[0, start:], skip_special_tokens=False):
+            out = _release(model, tok, out, ids_cache, max_answer, temp, top_p, stop)
+    elif mode == "budget":
+        room = max(0, budget - n_pre)
+        out = model.generate(seq, max_new_tokens=room, do_sample=True, temperature=temp,
+                             top_p=top_p, logits_processor=_suppress_until(banned, room),
+                             pad_token_id=tok.pad_token_id, stopping_criteria=stop) if room else seq
+        out = _release(model, tok, out, ids_cache, max_answer, temp, top_p, stop)
+    elif mode == "wait":
+        wait_ids = torch.tensor([hm.encode(tok, wait_text)], dtype=seq.dtype, device=seq.device)
+        while (seq.shape[1] - start - len(ids_cache["open"])) < budget and injected < max_injections:
+            room = budget - (seq.shape[1] - start - len(ids_cache["open"]))
+            out = model.generate(seq, max_new_tokens=room, do_sample=True, temperature=temp,
+                                 top_p=top_p, eos_token_id=banned,
+                                 pad_token_id=tok.pad_token_id, stopping_criteria=stop)
+            gen = out[0, seq.shape[1]:]
+            if len(gen) == 0 or int(gen[-1]) != ids_cache["end"]:
+                seq = out                      # hit the budget or a real stop; nothing to inject
+                break
+            seq = torch.cat([out[:, :-1], wait_ids], dim=1)   # drop <|end|>, inject Wait
+            injected += 1
+        out = _release(model, tok, seq, ids_cache, max_answer, temp, top_p, stop)
+    else:
+        raise ValueError(f"unknown mode {mode!r}")
+
+    rec = _record(tok, start, out, ids_cache, t0)
+    rec.update(mode=mode, budget=budget, cut=cut, injections=injected, prefix_tokens=n_pre)
+    return rec
+
+
 def gen_clip(model, tok, prompt_ids, analysis_body, k, ids_cache, max_answer, seed,
              temp=TEMP, top_p=TOP_P, gen_timeout=None):
     """Re-answer from the first `k` tokens of an existing analysis body.

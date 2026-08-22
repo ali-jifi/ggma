@@ -54,9 +54,11 @@ def _setup():
         def __init__(self):
             self.canned = []
             self.seen = None
+            self.calls = []
 
         def generate(self, input_ids, **kw):
             self.seen = [int(x) for x in input_ids[0]]
+            self.calls.append(self.seen)
             new = torch.tensor([self.canned], dtype=input_ids.dtype)
             return torch.cat([input_ids, new], dim=1)
 
@@ -160,6 +162,63 @@ def test_clip_records_a_refusal_answer():
     r = G.gen_clip(_STATE["model"], tok, _STATE["prompt"], _body("we must refuse"), 3, ids, 32,
                    seed=0)
     assert lb.profile(r["text"])["answer_label"] == lb.REFUSE
+
+
+# ------------------------------------------------------------------ gen_force
+def test_force_budget_suppresses_then_releases():
+    """Suppression forcing must ban the stop tokens, then append the transition itself."""
+    if not _setup():
+        return
+    G, ids, tok = _STATE["G"], _STATE["ids"], _STATE["tok"]
+    body = _body("We must refuse this request.")
+    _STATE["model"].canned = _body("filler") + []
+    _STATE["model"].calls = []
+    prompt_ids = [int(x) for x in _STATE["prompt"][0]]
+    r = G.gen_force(_STATE["model"], tok, _STATE["prompt"], body, 4, 64, ids, 32, seed=0,
+                    mode="budget")
+    first = _STATE["model"].calls[0]
+    assert first == prompt_ids + ids["open"] + body[:4]
+    last = _STATE["model"].calls[-1]
+    assert last[-len(ids["header"]):] == ids["header"]
+    assert r["mode"] == "budget" and r["prefix_tokens"] == 4 and r["budget"] == 64
+
+
+def test_force_natural_does_not_release_when_it_answered():
+    """The control must not be forced: if it opened `final` itself, leave it alone."""
+    if not _setup():
+        return
+    G, ids, tok = _STATE["G"], _STATE["ids"], _STATE["tok"]
+    _STATE["model"].canned = [ids["end"]] + ids["header"] + _body("Hello!") + [ids["stops"][0]]
+    _STATE["model"].calls = []
+    r = G.gen_force(_STATE["model"], tok, _STATE["prompt"], _body("x"), 1, 64, ids, 32, seed=0,
+                    mode="natural")
+    assert len(_STATE["model"].calls) == 1
+    assert r["closed"] is True
+
+
+def test_force_wait_injects_and_is_capped():
+    """Each attempt to close the analysis is replaced by an injection, up to the cap."""
+    if not _setup():
+        return
+    G, ids, tok = _STATE["G"], _STATE["ids"], _STATE["tok"]
+    _STATE["model"].canned = _body("thinking") + [ids["end"]]
+    _STATE["model"].calls = []
+    r = G.gen_force(_STATE["model"], tok, _STATE["prompt"], _body("x"), 1, 100000, ids, 32,
+                    seed=0, mode="wait", max_injections=3)
+    assert r["injections"] == 3
+    assert _STATE["model"].calls[-1][-len(ids["header"]):] == ids["header"]
+
+
+def test_force_rejects_an_unknown_mode():
+    if not _setup():
+        return
+    G, ids, tok = _STATE["G"], _STATE["ids"], _STATE["tok"]
+    try:
+        G.gen_force(_STATE["model"], tok, _STATE["prompt"], _body("x"), 1, 64, ids, 32, seed=0,
+                    mode="nope")
+        raise AssertionError("should have raised")
+    except ValueError:
+        pass
 
 
 def _run_all():
