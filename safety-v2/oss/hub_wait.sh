@@ -7,7 +7,7 @@
 # whichever cards happen to be free -- and `device_map=auto` fills card 0 first, so it OOMs beside
 # a neighbour unless it is told the real per-card budget.
 #
-#   ALLOW=2,3,4,5,6,7 NEED=50000 bash safety-v2/oss/hub_wait.sh \
+#   ALLOW=2,3,4,5,6,7 bash safety-v2/oss/hub_wait.sh \
 #       .venv/bin/python safety-v2/oss/run_force.py --stage force --run oss_force_v1
 #
 # The command receives:
@@ -16,7 +16,12 @@
 #                         --max-memory / --judge-max-memory
 #
 # ALLOW     comma-separated GPU indices this account may use (default 4,5)
-# NEED      total free MiB required across the chosen cards (default 50000)
+# WEIGHTS   MiB the model's weights need (gpt-oss-20b bf16: 20.9B x 2 bytes = 39834)
+# HEADROOM  MiB gen.load's _shrink takes off EACH card before handing accelerate the budget.
+#           A fixed NEED could not express this: headroom scales with card count, so the same
+#           claim that fits on three cards falls under the weights on six. The accept test is
+#           therefore (claimed - cards*HEADROOM) >= WEIGHTS, the condition that actually has
+#           to hold inside the loader.
 # MINCARD   ignore cards with less than this free, so the model is not smeared over scraps.
 #           Default is deliberately high: a 39GiB bf16 model spread over six part-full cards is
 #           six races to lose, and accelerate's placement overshoot lands on the tightest one.
@@ -28,10 +33,11 @@ set -euo pipefail
 
 REPO="${REPO:-$HOME/ggma}"
 ALLOW="${ALLOW:-4,5}"
-NEED="${NEED:-50000}"
+WEIGHTS="${WEIGHTS:-39834}"
+HEADROOM="${HEADROOM:-2048}"
 MINCARD="${MINCARD:-12000}"
 RESERVE="${RESERVE:-4000}"
-CAP="${CAP:-18000}"
+CAP="${CAP:-26000}"
 POLL="${POLL:-60}"
 RETRIES="${RETRIES:-10}"
 cd "$REPO"
@@ -45,7 +51,8 @@ export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:T
 PY="$REPO/.venv/bin/python"
 [ -x "$PY" ] || { echo "no interpreter at $PY"; exit 1; }
 "$PY" -c "import torch;print('torch',torch.__version__,'cuda',torch.version.cuda)"
-[ "$#" -gt 0 ] || { echo "usage: ALLOW=4,5 NEED=50000 bash hub_wait.sh <command...>"; exit 1; }
+[ -z "${NEED:-}" ] || echo "note: NEED is retired; the accept test is WEIGHTS + HEADROOM/card"
+[ "$#" -gt 0 ] || { echo "usage: ALLOW=4,5 bash hub_wait.sh <command...>"; exit 1; }
 
 snapshot() {
   echo "  --- nvidia-smi free MiB ---"
@@ -66,19 +73,20 @@ pick() {
     mm="${mm}${mm:+,}${i}:${usable}MiB"
     total=$((total + usable))
     i=$((i + 1))
-    [ "$total" -ge "$NEED" ] && break
+    [ $((total - i * HEADROOM)) -ge "$WEIGHTS" ] && break
   done < <(nvidia-smi --query-gpu=index,memory.free --format=csv,noheader,nounits | sort -t, -k2 -nr)
-  [ "$total" -ge "$NEED" ] || return 1
-  printf '%s|%s|%s\n' "$dev" "$mm" "$total"
+  [ $((total - i * HEADROOM)) -ge "$WEIGHTS" ] || return 1
+  printf '%s|%s|%s|%s\n' "$dev" "$mm" "$total" "$((total - i * HEADROOM))"
 }
 
 ATTEMPT=0
 while :; do
   if SEL="$(pick)"; then
-    DEV="${SEL%%|*}"; REST="${SEL#*|}"; MM="${REST%%|*}"; TOT="${REST##*|}"
+    DEV="${SEL%%|*}"; REST="${SEL#*|}"; MM="${REST%%|*}"
+    REST="${REST#*|}"; TOT="${REST%%|*}"; EFF="${REST##*|}"
     ATTEMPT=$((ATTEMPT + 1))
-    echo "$(date +%H:%M:%S) attempt $ATTEMPT on GPUs [$DEV] with ${TOT}MiB usable -- caps $MM"
-    if [ "$TOT" -lt "$NEED" ]; then echo "  (short of NEED=${NEED}; expect a spill)"; fi
+    echo "$(date +%H:%M:%S) attempt $ATTEMPT on GPUs [$DEV] claiming ${TOT}MiB -- caps $MM"
+    echo "  after headroom the loader gets ${EFF}MiB against ${WEIGHTS}MiB of weights"
     export CUDA_VISIBLE_DEVICES="$DEV"
     export OSS_MAXMEM="$MM"
     # Not exec: losing the race to a neighbour that grows during the ~75s load is the common
@@ -90,14 +98,14 @@ while :; do
     if [ "$ATTEMPT" -ge "$RETRIES" ]; then
       echo "$(date +%H:%M:%S) giving up after $ATTEMPT attempts"
       snapshot
-      echo "If free memory above is genuinely short of ${NEED}MiB, this is a full box, not a bug:"
-      echo "wait, or lower CAP and raise the card count. If it is NOT short, the load overshot its"
-      echo "cap -- raise headroom_gib in gen.load."
+      echo "If the free column cannot reach ${WEIGHTS}MiB after headroom, this is a full box,"
+      echo "not a bug: wait, widen ALLOW, or lower MINCARD to admit smaller cards. Note each"
+      echo "extra card costs another ${HEADROOM}MiB, so slivers can make the total go DOWN."
       exit 1
     fi
     echo "$(date +%H:%M:%S) attempt $ATTEMPT failed; re-picking in ${POLL}s"
   else
-    echo "$(date +%H:%M:%S) waiting for ${NEED}MiB across [$ALLOW] (min ${MINCARD}/card, reserving ${RESERVE})"
+    echo "$(date +%H:%M:%S) waiting: need ${WEIGHTS}MiB after ${HEADROOM}MiB/card headroom, across [$ALLOW] (min ${MINCARD}/card, reserving ${RESERVE})"
     snapshot
   fi
   sleep "$POLL"
