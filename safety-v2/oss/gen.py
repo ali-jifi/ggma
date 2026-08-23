@@ -20,7 +20,7 @@ TEMP, TOP_P = 0.6, 0.95
 
 # ---------------------------------------------------------------- loading
 def load(model_path=MODEL, attn="eager", dtype="auto", device_map="cuda", dequantize=False,
-         max_memory=None, pre_claim=True, headroom_gib=3.0):
+         max_memory=None, pre_claim=True, headroom_gib=2.0):
     """Load gpt-oss and its tokenizer, asserting the harmony token ids on the way through.
 
     `attn` defaults to eager because SDPA is unsupported on this architecture (attention sinks need
@@ -53,11 +53,12 @@ def load(model_path=MODEL, attn="eager", dtype="auto", device_map="cuda", dequan
     if pre_claim and max_memory:
         # Claim the FULL budget, then hand accelerate a smaller one. max_memory only steers weight
         # PLACEMENT -- buffers and dispatch push the real footprint past it (measured: 12.92GiB
-        # resident against an 11.5GiB cap, and 8.85GiB against 6.35GiB), so the claim has to cover
-        # the overshoot or the load dies at dispatch with the card already full. Headroom is 3GiB
-        # because placement is layer-granular and one gpt-oss MoE layer is ~1.6GiB.
+        # resident against an 11.5GiB cap), so the claim has to cover the overshoot or the load dies
+        # at dispatch with the card already full. 2GiB covers that measured 1.42GiB overshoot and no
+        # more: headroom is subtracted PER CARD, so on four cards every extra GiB costs four.
         reserve(max_memory, slack_gib=0.0)
         max_memory = _shrink(max_memory, headroom_gib)
+        _report_budget(max_memory, headroom_gib)
     kw = {"device_map": device_map, "attn_implementation": attn}
     if max_memory:
         # Shared boxes: device_map="auto" fills card 0 before spilling, so a neighbour
@@ -82,6 +83,27 @@ def load(model_path=MODEL, attn="eager", dtype="auto", device_map="cuda", dequan
           f"{ev['allocated_gb']:.1f}GB, quant={ev['quant_method']}, "
           f"mxfp4_modules={ev['mxfp4_modules']}", flush=True)
     return model, tok
+
+
+WEIGHTS_GIB = 38.9   # gpt-oss-20b in bf16: 20.9B params x 2 bytes. The number the budget must clear.
+
+
+def _report_budget(max_memory, headroom_gib, need_gib=WEIGHTS_GIB):
+    """Print the budget accelerate actually receives, and flag it when headroom has eaten it.
+
+    Headroom comes off EVERY card, so spreading wider costs more budget: four cards at 3GiB removes
+    12GiB, which on a tight box drops the total below the weights themselves. That failure surfaces
+    deep in dispatch as an ordinary OOM, nowhere near the launcher constant that caused it.
+    """
+    cards = [k for k in max_memory if isinstance(k, int)]
+    tot = sum(_bytes(max_memory[k]) for k in cards) / (1 << 30)
+    print(f"[load] accelerate budget {tot:.1f}GiB across {len(cards)} cards "
+          f"(after {headroom_gib:.1f}GiB/card headroom)", flush=True)
+    if tot < need_gib:
+        print(f"[load] WARNING: {tot:.1f}GiB is under the ~{need_gib:.1f}GiB of bf16 weights -- "
+              f"accelerate will spill to CPU or die at dispatch. Raise CAP in hub_wait.sh, lower "
+              f"headroom_gib, or claim another card.", flush=True)
+    return tot
 
 
 def _bytes(spec):
