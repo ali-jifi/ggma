@@ -20,7 +20,7 @@ TEMP, TOP_P = 0.6, 0.95
 
 # ---------------------------------------------------------------- loading
 def load(model_path=MODEL, attn="eager", dtype="auto", device_map="cuda", dequantize=False,
-         max_memory=None, pre_claim=True, headroom_gib=2.0):
+         max_memory=None, pre_claim=False, headroom_gib=2.0):
     """Load gpt-oss and its tokenizer, asserting the harmony token ids on the way through.
 
     `attn` defaults to eager because SDPA is unsupported on this architecture (attention sinks need
@@ -50,13 +50,21 @@ def load(model_path=MODEL, attn="eager", dtype="auto", device_map="cuda", dequan
               f"{torch.cuda.device_count()} visible GPUs with NO max_memory -- placement is "
               "uncapped and the pre-claim is disabled. Pass --max-memory or export OSS_MAXMEM "
               "(hub_wait.sh sets it) if this box is shared.", flush=True)
-    if pre_claim and max_memory:
+    if max_memory:
+        # OFF BY DEFAULT: the pre-claim and the placement logic want opposite things. Memory the
+        # caching allocator holds is indistinguishable from a neighbour's at the driver level, so
+        # claiming the budget first makes the cards look full to whatever reads free memory during
+        # placement -- one run claimed 56GiB, then offloaded most of a 39GiB model to disk against
+        # a 50GiB budget. A lost race is loud and retryable; a silent disk offload is neither.
         # Claim the FULL budget, then hand accelerate a smaller one. max_memory only steers weight
         # PLACEMENT -- buffers and dispatch push the real footprint past it (measured: 12.92GiB
         # resident against an 11.5GiB cap), so the claim has to cover the overshoot or the load dies
         # at dispatch with the card already full. 2GiB covers that measured 1.42GiB overshoot and no
         # more: headroom is subtracted PER CARD, so on four cards every extra GiB costs four.
-        reserve(max_memory, slack_gib=0.0)
+        if pre_claim:
+            reserve(max_memory, slack_gib=0.0)
+        # Always shrink, pre-claim or not: hub_wait.sh's accept test assumes HEADROOM comes off
+        # every card, so skipping it here would hand accelerate a budget the launcher never sized.
         max_memory = _shrink(max_memory, headroom_gib)
         _report_budget(max_memory, headroom_gib)
     kw = {"device_map": device_map, "attn_implementation": attn}
@@ -78,9 +86,10 @@ def load(model_path=MODEL, attn="eager", dtype="auto", device_map="cuda", dequan
         model = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=dt, **kw)
     model = model.eval()
     model.requires_grad_(False)
+    assert_placement(model)
     ev = mxfp4_evidence(model)
     print(f"[load] {model_path} attn={attn} in {time.time() - t0:.0f}s, "
-          f"{ev['allocated_gb']:.1f}GB, quant={ev['quant_method']}, "
+          f"{ev['allocated_gb']:.1f}GB {ev['per_device_gb']}, quant={ev['quant_method']}, "
           f"mxfp4_modules={ev['mxfp4_modules']}", flush=True)
     return model, tok
 
@@ -104,6 +113,29 @@ def _report_budget(max_memory, headroom_gib, need_gib=WEIGHTS_GIB):
               f"accelerate will spill to CPU or die at dispatch. Raise CAP in hub_wait.sh, lower "
               f"headroom_gib, or claim another card.", flush=True)
     return tot
+
+
+def assert_placement(model, allow_cpu=False):
+    """Refuse a load that spilled off the GPUs.
+
+    Accelerate does not fail when the budget is short -- it quietly assigns the overflow to cpu and
+    then to disk, and the only notice is a one-line warning in a wall of loader output. The model
+    then generates correctly at roughly disk speed, so the run looks alive and returns nothing for
+    hours. This turns that into an exception at load time.
+    """
+    from collections import Counter
+    dm = getattr(model, "hf_device_map", None)
+    if not dm:
+        return {}
+    c = Counter(str(v) for v in dm.values())
+    print(f"[load] placement: {dict(sorted(c.items()))}", flush=True)
+    bad = sorted(d for d in c if d == "disk" or (d in ("cpu", "meta") and not allow_cpu))
+    if bad:
+        raise RuntimeError(
+            f"{sum(c[d] for d in bad)} of {sum(c.values())} modules placed on {bad}: the model did "
+            f"not fit the GPU budget, and generation would run at offload speed. Placement: "
+            f"{dict(sorted(c.items()))}. Claim more memory, or lower headroom_gib.")
+    return dict(c)
 
 
 def _bytes(spec):
@@ -175,7 +207,15 @@ def mxfp4_evidence(model):
         method = None
     n_mx = sum(1 for m in model.modules() if "mxfp4" in type(m).__name__.lower())
     return {
-        "allocated_gb": torch.cuda.memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0,
+        # Sum over EVERY visible device. The bare call reads the current device only, which on a
+        # three-card placement reported 14.3GB for a 41.8GB model and made a disk offload look like
+        # a small model rather than a broken load.
+        "allocated_gb": (sum(torch.cuda.memory_allocated(i)
+                             for i in range(torch.cuda.device_count())) / 1e9
+                         if torch.cuda.is_available() else 0.0),
+        "per_device_gb": ({i: round(torch.cuda.memory_allocated(i) / 1e9, 1)
+                           for i in range(torch.cuda.device_count())}
+                          if torch.cuda.is_available() else {}),
         "quant_method": str(method) if method is not None else None,
         "mxfp4_modules": n_mx,
         "n_layers": int(model.config.num_hidden_layers),
