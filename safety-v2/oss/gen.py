@@ -20,7 +20,7 @@ TEMP, TOP_P = 0.6, 0.95
 
 # ---------------------------------------------------------------- loading
 def load(model_path=MODEL, attn="eager", dtype="auto", device_map="cuda", dequantize=False,
-         max_memory=None, pre_claim=True, headroom_gib=2.0):
+         max_memory=None, pre_claim=True, headroom_gib=3.0):
     """Load gpt-oss and its tokenizer, asserting the harmony token ids on the way through.
 
     `attn` defaults to eager because SDPA is unsupported on this architecture (attention sinks need
@@ -42,11 +42,20 @@ def load(model_path=MODEL, attn="eager", dtype="auto", device_map="cuda", dequan
     hm.assert_token_ids(tok)
 
     dt = "auto" if dtype == "auto" else getattr(torch, dtype)
+    if not max_memory and device_map == "auto" and torch.cuda.device_count() > 1:
+        # The failure this guards against left no trace: with max_memory None the cap AND the
+        # pre-claim both no-op, device_map="auto" fills the first card it reaches, and the only
+        # symptom is an OOM that reads exactly like a busy neighbour. Ten launches were spent on it.
+        print("[load] WARNING: device_map=auto across "
+              f"{torch.cuda.device_count()} visible GPUs with NO max_memory -- placement is "
+              "uncapped and the pre-claim is disabled. Pass --max-memory or export OSS_MAXMEM "
+              "(hub_wait.sh sets it) if this box is shared.", flush=True)
     if pre_claim and max_memory:
         # Claim the FULL budget, then hand accelerate a smaller one. max_memory only steers weight
         # PLACEMENT -- buffers and dispatch push the real footprint past it (measured: 12.92GiB
-        # resident against an 11.5GiB cap), so the claim has to cover the overshoot or the load
-        # dies at dispatch with the card already full.
+        # resident against an 11.5GiB cap, and 8.85GiB against 6.35GiB), so the claim has to cover
+        # the overshoot or the load dies at dispatch with the card already full. Headroom is 3GiB
+        # because placement is layer-granular and one gpt-oss MoE layer is ~1.6GiB.
         reserve(max_memory, slack_gib=0.0)
         max_memory = _shrink(max_memory, headroom_gib)
     kw = {"device_map": device_map, "attn_implementation": attn}

@@ -23,6 +23,7 @@ text -- dropping it is what cost the natural harvest its central claim.
 """
 import argparse
 import json
+import os
 import random
 import sys
 import time
@@ -41,7 +42,15 @@ CUTS = (0, 32, 64, 128, 256, 512, 1024, 2048)
 
 
 def _parse_mem(spec):
-    """"0:20GiB,1:38GiB" -> {0: "20GiB", 1: "38GiB"}. None when unset."""
+    """"0:20GiB,1:38GiB" -> {0: "20GiB", 1: "38GiB"}. None when unset.
+
+    Falls back to $OSS_MAXMEM, which hub_wait.sh exports after it picks cards. That export used to
+    be load-bearing only if the caller also typed `--max-memory "$OSS_MAXMEM"`; when they did not,
+    max_memory was None, which silently disabled BOTH the per-card cap and the pre-claim (`reserve`
+    is gated on it) and let device_map="auto" fill whichever card it reached first. Ten straight
+    launches OOM'd that way against a placement layer that was never actually running.
+    """
+    spec = spec or os.environ.get("OSS_MAXMEM", "")
     if not spec:
         return None
     out = {}
