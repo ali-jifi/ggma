@@ -1,0 +1,33 @@
+################ RUN START Fri Aug  7 14:50:19 UTC 2026 ################
+0, NVIDIA A100-SXM4-40GB, 1929 MiB
+1, NVIDIA A100-SXM4-40GB, 541 MiB
+2, NVIDIA A100-SXM4-40GB, 14277 MiB
+3, NVIDIA A100-SXM4-40GB, 25527 MiB
+4, NVIDIA A100-SXM4-40GB, 0 MiB
+5, NVIDIA A100-SXM4-40GB, 0 MiB
+6, NVIDIA A100-SXM4-40GB, 541 MiB
+7, NVIDIA A100-SXM4-40GB, 9107 MiB
+[gpus] 4 5 free
+
+################ PHASE 1 — single card, 2 in parallel ################
+Fri Aug  7 14:50:20 UTC 2026
+workerA pid=1277231 (GPU 4)   workerB pid=1277232 (GPU 5)
+phase 1 done rcA=0 rcB=0  Fri Aug  7 18:34:39 UTC 2026
+
+################ PHASE 2 — 16384, sharded across GPU 4+5 ################
+Fri Aug  7 18:34:39 UTC 2026
+[gpus] 4 5 free
+phase 2 rc=2  Sat Aug  8 07:00:00 UTC 2026
+
+################ WHAT LANDED ################
+  A-anchor-1536    partial=24   traces=24   judged
+  A-wait-16k       partial=12   traces=12   judged
+  A-wait-4k8k      partial=24   traces=24   judged
+  B-anchor-1536    partial=24   traces=24   judged
+  B-supp-16k       partial=12   traces=12   judged
+  B-supp-4k8k      partial=24   traces=24   judged
+  B-wait-16k       partial=12   traces=12   judged
+  B-wait-4k        partial=12   traces=12   judged
+  B-wait-8k        partial=12   traces=12   judged
+/dev/mapper/vg.01-lv_ephemeral  6.8T  1.6T  4.9T  25% /opt/dlami/nvme
+################ RUN DONE Sat Aug  8 07:00:00 UTC 2026 ################

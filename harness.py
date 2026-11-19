@@ -1,19 +1,39 @@
 """
 harness.py (v2) -- shared toolkit for the Two Drifts project. One copy, both sides.
 
+FROZEN vs ITERABLE:
+  FROZEN (no edits without team sign-off): this file and the Trace schema. Both
+    sides build against it; a change on one side must land on both (R4).
+  ITERABLE (change freely): everything else -- matchers/, data/, scripts/,
+    analysis/. New behavior goes there, plugged in through the documented
+    interfaces (ConclusionMatcher, collect_trace, the outputs/ JSONL), never by
+    editing the engine below.
+
 Supersedes v1. Changes:
   - Trace schema upgraded to the full seven-group v2 spec (flat, single class).
   - Layer 1 commitment: truncation + free rollout (THE commitment definition).
-  - Layer 2 commitment: attention-to-anchor proxy + calibration against Layer 1.
+  - Layer 2 commitment: sink-corrected attention-to-anchor proxy (anchor mass
+    minus length-matched control-span mass, sink tokens excluded from both)
+    + calibration against Layer 1.
   - Margin demoted to secondary proxy (kept, never the definition, never an
     extraction regression target).
   - flip fields are CELL-level (computed across resamples), not per-row labels.
   - Three-way split: extraction | selection | heldout.
   - Multi-layer steering with recorded vector norms.
 
-Model-agnostic across Llama- and Qwen2-family HF models (layers at
-model.model.layers[i]). Layer 2 attention capture requires the model to be
-loaded with attn_implementation="eager".
+SCHEMA trace-v0.3.1 (schema_version="trace-v0.3.1"). Field-complete; two
+fields are DECLARED BUT NEVER POPULATED pending an agreed estimator spec --
+see SCHEMA_PENDING_FIELDS. Do not read the version string as "every field has a
+value"; read it as "every field exists". Added since trace-v2:
+  - Layer 2 sink correction (control_spans, attn_to_control, sink_exclude_k).
+  - R5 rollout CLOSURE tracking (rollout_closure_rates) -- see below.
+  - conclusion_key (canonical; final_answer kept as a deprecated mirror),
+    rollout_prefix_fracs, dtype, attn_implementation, prompt_tokens,
+    total_tokens, matcher_agreement_rate, calibration_model,
+    shape_bic_delta / shape_max_drop (pending).
+  - v0.3.1: forcing_method, the budget-forcing provenance marker (R6). The
+    shared schema is v0.3 + this one field; the interim stop_* diagnostics that
+    briefly rode alongside it are NOT part of the schema.
 
 RULES ENCODED HERE (do not weaken without team sign-off):
   R1. rollout_outcomes is the commitment definition. attn_to_anchor and
@@ -22,6 +42,19 @@ RULES ENCODED HERE (do not weaken without team sign-off):
       (calibrated_under_steering=False) has an UNUSABLE proxy.
   R3. split is assigned at generation time and never re-tagged.
   R4. Any schema field added on one side must be added on both.
+  R5. A rollout that hits max_new_tokens before emitting </think> never
+      committed to ANYTHING -- it is not evidence of changing its mind. Early
+      prefixes need more tokens to finish than late ones, so counting those
+      truncations as misses manufactures a rising curve out of the token cap.
+      rollout_closure_rates records the fraction that actually closed at each
+      prefix; a curve whose closure rate is low or climbing with prefix index
+      is measuring the cap, not commitment. Because no matcher can match an
+      unclosed completion (all return None without </think>), hits are a subset
+      of closures, so P(conclusion | closed) == rollout_outcomes / closure_rate.
+
+Model-agnostic across Llama- and Qwen2-family HF models (layers at
+model.model.layers[i]). Layer 2 attention capture requires the model to be
+loaded with attn_implementation="eager".
 """
 
 import hashlib
@@ -34,13 +67,45 @@ from typing import Optional, Callable
 import numpy as np
 import torch
 import torch.nn.functional as F
-from transformers import LogitsProcessor
+from transformers import (
+    LogitsProcessor, StoppingCriteria, TemperatureLogitsWarper, TopPLogitsWarper,
+)
 
-HARNESS_VERSION = "0.2.0"
-SCHEMA_VERSION = "trace-v2"
+HARNESS_VERSION = "0.4.3"
+# trace-v0.3.1 == the shared schema: math's trace-v0.3 plus ONE field, forcing_method
+# (R6 budget-forcing provenance). The interim trace-v0.4 briefly carried six additional
+# stop_* diagnostics; those were dropped as unused, so the schema narrows back onto the
+# v0.3 lineage both domains share. Downstream keys on this string for row shape.
+SCHEMA_VERSION = "trace-v0.3.1"
+
+# Split from HARNESS_VERSION because make_calibration_id() folds a version into every
+# calibration_id: without this split, a change to the GENERATION path -- which cannot
+# affect the Layer 2 attention proxy at all -- would invalidate every calibration Grace
+# has already fit. Bump this ONLY when something that actually changes a calibration
+# changes. The 0.3.0 -> 0.4.0 harness bump therefore leaves every calibration_id
+# byte-identical.
+CALIBRATION_VERSION = "0.3.0"
+
+# Declared in the schema but never populated yet: the shape estimator is not
+# agreed. Readers must treat these as absent, not as "no effect". Populate them
+# (and drop them from this tuple) once the estimator is pre-registered.
+SCHEMA_PENDING_FIELDS = ("shape_bic_delta", "shape_max_drop")
 
 VALID_SPLITS = ("extraction", "selection", "heldout")
 VALID_INDUCTION = ("natural", "hijack_preamble")
+# How the reasoning length was produced. The POSITIVE marker every R6 rule keys on --
+# never infer forcing from budget_condition: Stage C thinking-clipping is non-natural yet
+# is a mechanism distinct from suppression. "ceiling" widened this tuple in harness 0.4.2;
+# "wait" in 0.4.3. No FIELD was added by either, so the schema string stays trace-v0.3.1
+# and row shape is unchanged -- but this tuple is in the FROZEN file, so a new member is
+# an R4 change and needs team sign-off before data collected under it is shared.
+#
+# "wait" is s1/TTBC-2 budget forcing (scripts/wait_inject.py): the delimiter is suppressed
+# and a string is APPENDED at each stop attempt, until the budget. It is a different
+# mechanism from "suppression", which blocks stopping and appends nothing, and the two are
+# not interchangeable in an aggregate -- s1 Table 4 measures them apart at identical
+# budget. The injected string and its spans ride in Trace.notes until they earn a field.
+VALID_FORCING = ("none", "suppression", "clipping", "ceiling", "wait")
 VALID_ANCHOR_POLICY = ("first_anchor", "most_recent_anchor")
 VALID_ATTN_NORM = ("raw_mass", "per_token_mean")
 
@@ -63,7 +128,9 @@ class Trace:
     budget_condition: str             # "natural" | "256" | ... | "16384"
     thinking_tokens: int
     response_text: str
-    final_answer: Optional[str]       # math: number | safety: "refuse"|"comply"
+    final_answer: Optional[str]       # DEPRECATED mirror of conclusion_key; kept
+                                      # so trace-v2 readers keep working. Write
+                                      # both; read conclusion_key.
     outcome: str                      # math: correct|incorrect ; safety: refused|complied
     gold: str
     scorer_version: str
@@ -79,6 +146,33 @@ class Trace:
     scorer_confidence: Optional[float] = None
     sample_idx: int = 0               # which resample of this cell
     n_samples_per_cell: int = 1
+    # v0.3: canonical conclusion label (math: number | safety: refuse|comply).
+    # None == the trace never committed (no </think> / no extractable answer).
+    conclusion_key: Optional[str] = None
+    # v0.3: run provenance -- these change the numbers, so they belong on the row.
+    dtype: str = ""                   # "bfloat16" | "float16" | "float32"
+    attn_implementation: str = ""     # "sdpa" | "eager" (eager required for Layer 2)
+    prompt_tokens: int = -1
+    total_tokens: int = -1
+    # v0.3: agreement between the scorer of record and a cross-check matcher.
+    # Safety side only (classifier vs. heuristic); None when no cross-check ran.
+    matcher_agreement_rate: Optional[float] = None
+
+    # v0.3.1: BUDGET-FORCING provenance (R6). Under budget forcing thinking_tokens is the
+    # budget by construction (</think>/eos masked for the whole block, the tag pasted in
+    # afterwards), NOT a length the model chose. forcing_method is the POSITIVE marker for
+    # HOW the length was produced; every consumer keys on it and must never infer forcing
+    # from budget_condition (Stage C clipping is non-natural yet a distinct mechanism).
+    #   None          == not recorded. validate_trace REJECTS this on a non-natural row --
+    #                    exactly the rows whose thinking_tokens was never a measurement.
+    #   "none"        == natural decoding; thinking_tokens IS the model's chosen length
+    #   "suppression" == generate_exact_thinking; thinking_tokens == the budget
+    #   "clipping"    == the trace was cut and </think> pasted (Stage C)
+    #   "ceiling"     == generate_capped_thinking; the budget was an UPPER BOUND, so
+    #                    thinking_tokens <= budget and is a real measurement whenever it
+    #                    came in under (thinking_tokens < budget == the model closed
+    #                    </think> itself; == budget == the cap closed it).
+    forcing_method: Optional[str] = None
 
     # ---- GROUP 2: flip / pairing. CELL-level, stamped onto rows by
     #      compute_cell_stats(). Never hand-set from a single run at temp 0.6.
@@ -89,24 +183,43 @@ class Trace:
 
     # ---- GROUP 3: commitment, Layer 1 (rollout ground truth). THE definition.
     rollout_prefix_positions: list = field(default_factory=list)  # absolute token idx, inside think block
+    rollout_prefix_fracs: list = field(default_factory=list)  # v0.3: same prefixes as fraction through the think block
     n_rollouts_per_prefix: int = 0
     rollout_outcomes: list = field(default_factory=list)  # per prefix: fraction reaching trace's final conclusion
+    # v0.3 (R5): per prefix, fraction of rollouts that emitted </think> before
+    # max_new_tokens. MANDATORY alongside rollout_outcomes -- without it you
+    # cannot tell commitment from the token cap. Unclosed rollouts can never
+    # match, so P(conclusion | closed) == rollout_outcomes[j] / closure[j].
+    rollout_closure_rates: list = field(default_factory=list)
+    rollout_max_new_tokens: Optional[int] = None  # v0.3: the cap closure is relative to
     rollout_completion_texts: list = field(default_factory=list)  # optional, list[list[str]]
     rollout_decode_temp: Optional[float] = None
     rollout_decode_top_p: Optional[float] = None
     rollout_seed: Optional[int] = None
 
     # ---- GROUP 4: commitment, Layer 2 (cheap proxies) ----
-    anchor_spans: list = field(default_factory=list)      # [[start, end), ...] absolute token idx
+    anchor_spans: list = field(default_factory=list)      # [[start, end), ...] absolute token idx, sink-excluded
     anchor_policy: Optional[str] = None                   # pre-registered
     attn_norm_method: Optional[str] = None                # pre-registered
     attn_to_anchor: list = field(default_factory=list)    # one value per generated-token position
+    sink_exclude_k: int = 4                               # first k prompt positions excluded from every span
+    control_spans: list = field(default_factory=list)     # length-matched non-anchor prompt spans
+    control_span_len: Optional[int] = None                # actual total control tokens (== anchor len when possible)
+    attn_to_control: list = field(default_factory=list)   # one value per generated-token position
     attn_layers_used: list = field(default_factory=list)
     calibration_id: Optional[str] = None
+    calibration_model: Optional[str] = None               # v0.3: model the cal was fit on;
+                                                          # a cal is invalid across models
     calibrated_under_steering: bool = False               # R2
     commitment_margin: list = field(default_factory=list)  # SECONDARY proxy only
     entropy_trace: list = field(default_factory=list)
     shape: str = "unlabeled"          # "gradual" | "cliff" | "unlabeled"
+    # v0.3, PENDING (see SCHEMA_PENDING_FIELDS): declared so the schema is
+    # field-complete, but never written -- the shape estimator is not agreed.
+    # None here means "not computed", NOT "no effect". Do not infer shape from
+    # nulls; do not populate without pre-registering the estimator.
+    shape_bic_delta: Optional[float] = None
+    shape_max_drop: Optional[float] = None
 
     # ---- GROUP 5: activations. Tensors live in a sidecar npz (see io);
     #      the row stores the pointer + indices. (Flagged deviation from the
@@ -147,16 +260,64 @@ def validate_trace(t: Trace, stage: str = "surface"):
         errs.append(f"bad induction {t.induction!r}")
     if t.domain == "math" and t.induction != "natural":
         errs.append("math rows must have induction='natural'")
+    if t.conclusion_key != t.final_answer:
+        errs.append("final_answer must mirror conclusion_key (deprecated alias)")
+    # --- R6: budget-forcing provenance. Gated on the POSITIVE forcing_method marker, never
+    # on budget_condition -- gating on the latter would reject every Stage C
+    # thinking-clipping row (the plan's recommended drift method) on the day it is written.
+    if t.forcing_method is not None and t.forcing_method not in VALID_FORCING:
+        errs.append(f"forcing_method must be one of {VALID_FORCING} or None, "
+                    f"got {t.forcing_method!r}")
+    if t.forcing_method is None and t.budget_condition != "natural":
+        # A forced row with no marker: thinking_tokens is the budget echoed back, never a
+        # measurement, so refusing it is the point.
+        errs.append(f"R6 violation: non-natural row (budget_condition="
+                    f"{t.budget_condition!r}) without forcing_method. Set 'suppression' "
+                    "or 'clipping'; thinking_tokens alone is the input echoed back.")
+    elif t.forcing_method == "suppression":
+        if str(t.budget_condition).isdigit() and t.thinking_tokens != int(t.budget_condition):
+            # Canary: an unsuppressed stop id ends pass 1 early, silently shortening the
+            # block while the run still "succeeds".
+            errs.append(f"forced block is {t.thinking_tokens} tokens but budget is "
+                        f"{t.budget_condition}: a stop id escaped suppression")
+    elif t.forcing_method == "ceiling":
+        if str(t.budget_condition).isdigit() and t.thinking_tokens > int(t.budget_condition):
+            # The mirror-image canary. Under a ceiling the ONLY invariant is <=; a row
+            # over the cap means the cap never bound (a miscounted think block, or a
+            # </think> that landed after the answer pass started), and the row's length
+            # is then neither the model's choice nor the number we asked for.
+            errs.append(f"ceiling row ran to {t.thinking_tokens} thinking tokens past a "
+                        f"budget of {t.budget_condition}: the cap did not bind")
     if stage in ("metric", "steered"):
         if not t.rollout_prefix_positions or not t.rollout_outcomes:
             errs.append("metric stage requires Layer 1 rollout fields (R1)")
         if len(t.rollout_prefix_positions) != len(t.rollout_outcomes):
             errs.append("rollout positions/outcomes length mismatch")
+        # R5: a curve without closure rates is uninterpretable -- you cannot
+        # separate commitment from the token cap. Refuse to call it valid.
+        if not t.rollout_closure_rates:
+            errs.append("R5 violation: rollout_outcomes present without "
+                        "rollout_closure_rates; curve cannot be distinguished "
+                        "from a max_new_tokens artifact")
+        elif len(t.rollout_closure_rates) != len(t.rollout_outcomes):
+            errs.append("rollout outcomes/closure_rates length mismatch")
+        else:
+            for j, (o, c) in enumerate(zip(t.rollout_outcomes,
+                                           t.rollout_closure_rates)):
+                # hits are a subset of closures for every conforming matcher
+                if o > c + 1e-9:
+                    errs.append(f"prefix {j}: outcome {o} exceeds closure {c}; "
+                                "matcher matched an unclosed completion")
         if t.attn_to_anchor:
             if t.anchor_policy not in VALID_ANCHOR_POLICY:
                 errs.append("attn_to_anchor present without valid anchor_policy")
             if t.attn_norm_method not in VALID_ATTN_NORM:
                 errs.append("attn_to_anchor present without valid attn_norm_method")
+            if not t.attn_to_control:
+                errs.append("attn_to_anchor present without attn_to_control "
+                            "(sink correction is mandatory)")
+            elif len(t.attn_to_control) != len(t.attn_to_anchor):
+                errs.append("attn_to_anchor/attn_to_control length mismatch")
     if stage == "steered":
         if t.steering_condition == "none":
             errs.append("steered stage but steering_condition='none'")
@@ -179,7 +340,103 @@ def get_think_end_id(tokenizer):
     return tid
 
 
+def get_eos_ids(model=None, tokenizer=None, *, for_suppression=True):
+    """Every id that could end generation, as a list[int]. FOR SUPPRESSION ONLY.
+
+    Budget forcing works by masking the stop tokens out of the logits until the budget.
+    Masking only tokenizer.eos_token_id is not enough -- Qwen-family models declare
+    SEVERAL stop ids in generation_config (<|im_end|> and <|endoftext|>), HF's stopping
+    criteria honours all of them, and the unmasked one lets the model stop early. That
+    failure is SILENT: generate_exact_thinking pastes </think> on afterwards, so
+    thinking_tokens still reports the budget you asked for.
+
+    WHY for_suppression IS KEYWORD-ONLY AND MUST STAY TRUE. Masking an extra id is
+    MONOTONE-SAFE: it can only prevent stopping, never cause it. Passing this union to
+    generate(eos_token_id=...) is the opposite -- it OVERRIDES generation_config and can
+    only make generation stop EARLIER, silently. The union is also wrong for that purpose
+    by construction: HF's authority is generation_config alone, which OVERRIDES
+    config.json when present, and that is exactly what a distill does. Handing a model
+    stop tokens its own generation config deliberately excluded shortens natural traces
+    -- the one path where thinking_tokens is a real measurement -- and perturbs
+    rollout_closure_rates, which is the R5 guard the commitment definition rests on.
+    """
+    if not for_suppression:
+        raise ValueError(
+            "get_eos_ids is for the suppression mask only. Do not pass it to "
+            "generate(eos_token_id=...): that overrides generation_config with a "
+            "superset and can only stop generation earlier, silently."
+        )
+    ids = []
+
+    def _add(v):
+        if v is None:
+            return
+        if torch.is_tensor(v):
+            for x in v.reshape(-1).tolist():
+                _add(x)
+            return
+        if isinstance(v, (list, tuple, set)):
+            for x in v:
+                _add(x)
+            return
+        if isinstance(v, bool) or not isinstance(v, int):
+            return          # strings / floats are not token ids; ignore, don't guess
+        if v >= 0 and v not in ids:
+            ids.append(v)
+
+    gen_cfg = getattr(model, "generation_config", None) if model is not None else None
+    _add(getattr(gen_cfg, "eos_token_id", None))
+    if model is not None:
+        _add(getattr(getattr(model, "config", None), "eos_token_id", None))
+    _add(getattr(tokenizer, "eos_token_id", None) if tokenizer is not None else None)
+
+    if not ids:
+        raise ValueError(
+            "no eos token id found on generation_config, config, or tokenizer; budget "
+            "forcing cannot suppress stopping and would silently under-run"
+        )
+    vocab = getattr(getattr(model, "config", None), "vocab_size", None)
+    if vocab is not None:
+        bad = [i for i in ids if i >= vocab]
+        if bad:
+            raise ValueError(f"eos ids {bad} out of range for vocab_size {vocab}")
+    return ids
+
+
+def get_pad_id(model=None, tokenizer=None):
+    """A SCALAR pad id for model.generate (which rejects a list here)."""
+    for v in (getattr(tokenizer, "pad_token_id", None) if tokenizer is not None else None,
+              getattr(getattr(model, "generation_config", None), "pad_token_id", None)):
+        if isinstance(v, int) and not isinstance(v, bool) and v >= 0:
+            return v
+    return get_eos_ids(model, tokenizer)[0]
+
+
+def cut_at_first_stop(new_tokens, stop_ids):
+    """Truncate a generated row at its first stop/pad id. ONE rule, shared by the batched
+    path and the unbatched reference arm -- the whole value of the batch-equivalence proof
+    is that both arms run the same rule, and they used to differ (batched cut on eos+pad,
+    reference on eos alone)."""
+    if not len(new_tokens):
+        return new_tokens
+    stops = torch.as_tensor(sorted({int(s) for s in stop_ids}), device=new_tokens.device)
+    hit = torch.isin(new_tokens, stops).nonzero()
+    return new_tokens[: int(hit[0])] if len(hit) else new_tokens
+
+
 def build_input_ids(model, tokenizer, prompt):
+    """The user turn, chat-templated. ONE user message, nothing on the assistant side.
+
+    Deliberately no assistant-side prefill hook. A prefill (teacher-forced text injected
+    after the `<think>` opener, as in Path Drift's stage-3 example) would not lengthen
+    reasoning -- it seeds the trace's opening direction, and a model that then complies may
+    simply be continuing a compliance-shaped pattern it was handed rather than eroding an
+    early refusal. It also contaminates Phase 2: excluding the injected POSITIONS from
+    pool_thinking does not remove the injected text's influence on every model-written
+    position after it, which attends back to it. Path Drift's mechanisms are implemented
+    prompt-side instead, where the model writes every token itself
+    (commitment/data/preambles/).
+    """
     messages = [{"role": "user", "content": prompt}]
     ids = tokenizer.apply_chat_template(
         messages, add_generation_prompt=True, return_tensors="pt"
@@ -231,8 +488,14 @@ def _scores_to_margin_entropy(scores_tuple):
 # =============================================================================
 
 class _SuppressUntil(LogitsProcessor):
+    """Blocks `token_ids` (</think> + every eos id) until `until` steps have passed, so the
+    model is forced to keep generating thinking tokens for the whole budget. Masking a
+    logit to -inf removes that token from the distribution the sampler draws from,
+    regardless of where this processor sits relative to the temperature/top-p warpers.
+    """
+
     def __init__(self, token_ids, until):
-        self.token_ids = token_ids
+        self.token_ids = list(token_ids)
         self.until = until
         self.step = 0
 
@@ -261,33 +524,98 @@ def generate_natural(model, tokenizer, prompt, max_new_tokens=16384,
     text = tokenizer.decode(new_tokens, skip_special_tokens=True)
     margins, entropies = _scores_to_margin_entropy(out.scores)
     think_tokens = _count_thinking_tokens(tokenizer, new_tokens)
-    return text, think_tokens, margins, entropies, out.sequences
+    # 6th value is None, not {}: nothing was suppressed here, so "did it want to stop"
+    # is not a separate question -- thinking_tokens IS the model's chosen length on this
+    # path. None != 0, and every consumer must filter on forcing_method before
+    # aggregating or natural rows dilute the statistic toward zero.
+    return text, think_tokens, margins, entropies, out.sequences, None
+
+
+# The budget at which a CEILING stops being the right instrument and forcing starts. At
+# or below it the model is usually still reasoning when the budget lands, so the budget
+# binds as an UPPER bound and an early natural close should be allowed to stand; above it
+# the budget is past what the model produces on its own, so suppression is the only way to
+# reach it. Keyed on the budget's SIZE, never on its position in a sweep -- otherwise
+# budget=512 would mean one mechanism in a 512/2048 run and another in a 256/512 run, and
+# two rows with identical budget_condition would not be the same experiment.
+CEILING_MAX_BUDGET = 1024
+
+
+def forcing_for_budget(budget, ceiling_max_budget=None):
+    """The forcing_method a numeric budget gets. ONE place, so the marker written onto the
+    row can never disagree with the generator that produced it."""
+    cap = CEILING_MAX_BUDGET if ceiling_max_budget is None else ceiling_max_budget
+    return "ceiling" if int(budget) <= int(cap) else "suppression"
+
+
+class _StopOnThinkEnd(StoppingCriteria):
+    """Ends generation once `think_end_id` is emitted, ADDITIVELY -- the model's own stop
+    ids keep working untouched. The obvious alternative, generate(eos_token_id=[think_end_id,
+    eos]), REPLACES generation_config's stop set, which is the failure get_eos_ids documents
+    at length: a Qwen-family model declares several stop ids and a hand-written list drops
+    the ones you forgot. A stopping criterion cannot drop a stop id, because it never
+    touches that list -- it only adds one more way to stop.
+    """
+
+    def __init__(self, think_end_id):
+        self.think_end_id = think_end_id
+
+    def __call__(self, input_ids, scores, **kwargs):
+        return input_ids[:, -1] == self.think_end_id
 
 
 @torch.no_grad()
-def generate_exact_thinking(model, tokenizer, prompt, thinking_budget,
-                            max_answer_tokens=600, temperature=0.6, top_p=0.95,
-                            seed=0):
+def generate_capped_thinking(model, tokenizer, prompt, thinking_budget,
+                             max_answer_tokens=600, temperature=0.6, top_p=0.95,
+                             seed=0):
+    """SHORT-budget arm: the budget is a CEILING, not an exact length.
+
+    Same two-pass shape as generate_exact_thinking (think, then answer) with the
+    suppression mask removed. The model may close </think> whenever it wants; the budget
+    only bites if it is STILL reasoning when the cap lands, and then </think> is pasted on
+    exactly as suppression does it. This is s1 (Muennighoff et al., 2501.19393) case (I) --
+    "if the model generates more thinking tokens than a desired limit, we forcefully end
+    the thinking process" -- and deliberately NOT case (II), which pads a model that
+    wanted to stop out to the full budget and bills you for the padding.
+
+    thinking_tokens is therefore a REAL measurement whenever it comes in under the cap,
+    and which close happened is recoverable from the row with no new schema field:
+    thinking_tokens < budget == the model closed the block itself; == budget == we closed
+    it. (A natural close landing exactly on the cap reads as ours. It is one token wide
+    and errs toward "we cut it off", which is the conservative direction.)
+    """
     torch.manual_seed(seed)
     think_end_id = get_think_end_id(tokenizer)
-    eos_id = tokenizer.eos_token_id
+    # Membership test only -- these ids are NEVER handed to generate(eos_token_id=...);
+    # stopping is left to the model's own criteria plus _StopOnThinkEnd. Used below to
+    # recognise a pass-1 that ended on a raw stop token instead of on </think>.
+    eos_ids = get_eos_ids(model, tokenizer)
+    pad_id = get_pad_id(model, tokenizer)
     ids = build_input_ids(model, tokenizer, prompt)
     prompt_len = ids.shape[1]
 
-    supp = _SuppressUntil([think_end_id, eos_id], until=thinking_budget)
     out1 = model.generate(
         ids, max_new_tokens=thinking_budget,
         do_sample=True, temperature=temperature, top_p=top_p,
-        logits_processor=[supp], pad_token_id=eos_id,
+        stopping_criteria=[_StopOnThinkEnd(think_end_id)], pad_token_id=pad_id,
         return_dict_in_generate=True, output_scores=True,
     )
-    seq1 = torch.cat(
-        [out1.sequences, torch.tensor([[think_end_id]], device=model.device)], dim=1
-    )
+    seq1 = out1.sequences
+    last = int(seq1[0, -1].item())
+    if last != think_end_id:
+        # Still reasoning when the cap landed (the common case), or it emitted a raw stop
+        # token without ever closing the block (rare; same treatment). Force the close, so
+        # every row on this path has a think block that ends in </think> and pass 2 has an
+        # answer to write.
+        if last in eos_ids:
+            seq1 = seq1[:, :-1]
+        seq1 = torch.cat(
+            [seq1, torch.tensor([[think_end_id]], device=model.device)], dim=1
+        )
     out2 = model.generate(
         seq1, max_new_tokens=max_answer_tokens,
         do_sample=True, temperature=temperature, top_p=top_p,
-        pad_token_id=eos_id,
+        pad_token_id=pad_id,
         return_dict_in_generate=True, output_scores=True,
     )
     full = out2.sequences
@@ -296,7 +624,60 @@ def generate_exact_thinking(model, tokenizer, prompt, thinking_budget,
     m1, e1 = _scores_to_margin_entropy(out1.scores)
     m2, e2 = _scores_to_margin_entropy(out2.scores)
     think_tokens = _count_thinking_tokens(tokenizer, new_tokens)
-    return text, think_tokens, list(m1) + list(m2), list(e1) + list(e2), full
+    # 6th value is None, as on both sibling paths: provenance rides on forcing_method,
+    # set by the caller (see forcing_for_budget).
+    return (text, think_tokens, list(m1) + list(m2), list(e1) + list(e2), full, None)
+
+
+@torch.no_grad()
+def generate_exact_thinking(model, tokenizer, prompt, thinking_budget,
+                            max_answer_tokens=600, temperature=0.6, top_p=0.95,
+                            seed=0):
+    torch.manual_seed(seed)
+    think_end_id = get_think_end_id(tokenizer)
+    # ALL stop ids, not just the tokenizer's: a Qwen3 declares several in
+    # generation_config and the unmasked one lets the model stop early -- silently,
+    # because </think> is pasted on below and thinking_tokens still reads as the budget.
+    eos_ids = get_eos_ids(model, tokenizer)
+    pad_id = get_pad_id(model, tokenizer)
+    ids = build_input_ids(model, tokenizer, prompt)
+    prompt_len = ids.shape[1]
+
+    supp = _SuppressUntil([think_end_id] + eos_ids, until=thinking_budget)
+    out1 = model.generate(
+        ids, max_new_tokens=thinking_budget,
+        do_sample=True, temperature=temperature, top_p=top_p,
+        logits_processor=[supp], pad_token_id=pad_id,
+        return_dict_in_generate=True, output_scores=True,
+    )
+    # LOUD. This is what converts this class of bug from silent to fatal: without it the
+    # next model with an undeclared stop id reproduces the exact same short run, and
+    # thinking_tokens still reports the budget because the tag is pasted on below.
+    produced = out1.sequences.shape[1] - prompt_len
+    if produced < thinking_budget:
+        raise RuntimeError(
+            f"budget forcing under-ran: asked {thinking_budget} thinking tokens, got "
+            f"{produced}. A stop id escaped _SuppressUntil (suppressed="
+            f"{[think_end_id] + eos_ids}). Do NOT trust thinking_tokens on this row."
+        )
+    seq1 = torch.cat(
+        [out1.sequences, torch.tensor([[think_end_id]], device=model.device)], dim=1
+    )
+    out2 = model.generate(
+        seq1, max_new_tokens=max_answer_tokens,
+        do_sample=True, temperature=temperature, top_p=top_p,
+        pad_token_id=pad_id,
+        return_dict_in_generate=True, output_scores=True,
+    )
+    full = out2.sequences
+    new_tokens = full[0][prompt_len:]
+    text = tokenizer.decode(new_tokens, skip_special_tokens=True)
+    m1, e1 = _scores_to_margin_entropy(out1.scores)
+    m2, e2 = _scores_to_margin_entropy(out2.scores)
+    think_tokens = _count_thinking_tokens(tokenizer, new_tokens)
+    # 6th value is None (kept for arity with generate_natural): budget-forcing provenance
+    # rides on forcing_method, set by the caller; no per-step diagnostics are recorded.
+    return (text, think_tokens, list(m1) + list(m2), list(e1) + list(e2), full, None)
 
 
 # =============================================================================
@@ -395,16 +776,29 @@ def rollout_commitment_curve(model, tokenizer, full_ids, prefix_positions,
     """
     Layer 1. For each prefix position p: continue freely n_rollouts times from
     full_ids[:p], score each completion with conclusion_match_fn, and record
-    the fraction that reach the trace's final conclusion.
+    both the fraction reaching the trace's final conclusion AND the fraction
+    that actually closed (emitted </think>) before max_new_tokens.
 
-    Returns (curve, texts):
-      curve: list of floats, one per prefix (the commitment curve)
-      texts: list[list[str]] if store_texts else []
+    Returns (curve, closure_rates, texts):
+      curve:         list of floats, one per prefix (the commitment curve)
+      closure_rates: list of floats, one per prefix -- fraction of rollouts that
+                     emitted </think> before the cap
+      texts:         list[list[str]] if store_texts else []
+
+    Why closure_rates is not optional (R5): a rollout truncated by
+    max_new_tokens never committed to anything, but conclusion_match_fn scores
+    it exactly like a rollout that genuinely reached a different conclusion.
+    Early prefixes have more reasoning left to emit, so they are truncated more
+    often than late prefixes -- which alone produces a rising curve with no
+    commitment in it. Read the curve only where closure_rate is high and flat;
+    P(conclusion | closed) == curve[j] / closure_rates[j].
+
     Cost: len(prefix_positions) * n_rollouts generations. Batched via
     num_return_sequences per prefix.
     """
-    curve, all_texts = [], []
+    curve, closure_rates, all_texts = [], [], []
     eos_id = tokenizer.eos_token_id
+    think_end_id = get_think_end_id(tokenizer)
     for j, p in enumerate(prefix_positions):
         torch.manual_seed(base_seed + 1009 * j)
         prefix = full_ids[:, :p]
@@ -413,27 +807,73 @@ def rollout_commitment_curve(model, tokenizer, full_ids, prefix_positions,
             do_sample=True, temperature=temperature, top_p=top_p,
             num_return_sequences=n_rollouts, pad_token_id=eos_id,
         )
-        texts = [
-            tokenizer.decode(out[k][p:], skip_special_tokens=False)
-            for k in range(n_rollouts)
-        ]
-        hits = sum(1 for t in texts if conclusion_match_fn(_ensure_closed(t)))
+        texts, closed = [], []
+        for k in range(n_rollouts):
+            gen_ids = out[k][p:]
+            # closed == the rollout left the think block under its own steam.
+            # Checked on token ids, not text, so it can't be fooled by decoding.
+            closed.append(bool((gen_ids == think_end_id).any().item()))
+            texts.append(tokenizer.decode(gen_ids, skip_special_tokens=False))
+        hits = sum(1 for t in texts if conclusion_match_fn(t))
         curve.append(hits / n_rollouts)
+        closure_rates.append(sum(closed) / n_rollouts)
         if store_texts:
             all_texts.append(texts)
-    return curve, all_texts
-
-
-def _ensure_closed(text):
-    """Rollouts from mid-think may or may not emit </think>; the math answer
-    extractor requires it. If absent, the rollout never committed: leave as-is
-    so the matcher returns False."""
-    return text
+    return curve, closure_rates, all_texts
 
 
 # =============================================================================
-# LAYER 2: ATTENTION-TO-ANCHOR. Cheap proxy; calibrate against Layer 1.
+# LAYER 2: SINK-CORRECTED ATTENTION-TO-ANCHOR. Cheap proxy; calibrate against
+# Layer 1. Signal = attn_to_anchor - attn_to_control, sink tokens excluded from
+# both spans (raw anchor mass partly measures attention-sink behavior, which
+# concentrates at sequence start and has its own length-dependent decay).
 # =============================================================================
+
+def exclude_sink_tokens(spans, sink_exclude_k):
+    """Clip the first sink_exclude_k token positions (BOS / system-template
+    sinks) out of every [start, end) span; drop spans that become empty."""
+    out = []
+    for s, e in spans:
+        s = max(s, sink_exclude_k)
+        if s < e:
+            out.append([s, e])
+    return out
+
+
+def find_control_span(anchor_spans, prompt_len, sink_exclude_k=4):
+    """Build length-matched, sink-excluded prompt spans that are NOT the anchor
+    (chat-template boilerplate, instruction scaffolding). Targets the same
+    total token count as the anchor spans, or as close as the prompt allows.
+    Returns (control_spans, control_span_len); ([], 0) if no eligible tokens.
+
+    Longest contiguous runs are taken first (fewest fragments), the last run
+    trimmed to hit the target length."""
+    target = sum(e - s for s, e in anchor_spans)
+    in_anchor = [False] * prompt_len
+    for s, e in anchor_spans:
+        for i in range(max(s, 0), min(e, prompt_len)):
+            in_anchor[i] = True
+    runs, start = [], None
+    for i in range(sink_exclude_k, prompt_len):
+        if not in_anchor[i]:
+            if start is None:
+                start = i
+        elif start is not None:
+            runs.append([start, i])
+            start = None
+    if start is not None:
+        runs.append([start, prompt_len])
+    runs.sort(key=lambda r: r[1] - r[0], reverse=True)
+    spans, total = [], 0
+    for s, e in runs:
+        if total >= target:
+            break
+        take = min(e - s, target - total)
+        spans.append([s, s + take])
+        total += take
+    spans.sort()
+    return spans, total
+
 
 def find_prompt_anchor_span(tokenizer, prompt_text, full_ids):
     """Locate the prompt-content tokens (the question / harmful request) inside
@@ -519,7 +959,8 @@ class AttnToAnchorRecorder:
 @torch.no_grad()
 def compute_attn_to_anchor(model, full_ids, layers, anchor_spans):
     """One teacher-forced forward pass; returns {layer: tensor[n_spans, seq]}
-    of raw heads-averaged attention mass onto each anchor span."""
+    of raw heads-averaged attention mass onto each span. Pass anchor and
+    control spans concatenated to measure both in the same pass."""
     seq_len = full_ids.shape[1]
     with AttnToAnchorRecorder(model, layers, anchor_spans, seq_len) as rec:
         model(full_ids)
@@ -561,6 +1002,20 @@ def reduce_anchor_mass(per_span_mass_layer, anchor_spans, policy, norm_method,
     return vec[gen_start_idx:].tolist()
 
 
+def reduce_control_mass(per_span_mass_layer, control_spans, norm_method,
+                        gen_start_idx):
+    """Reduce the control spans' [n_spans, seq] raw-mass tensor to the schema's
+    attn_to_control array. Control spans act as one pooled span: total mass,
+    normalized by total control length under per_token_mean."""
+    vec = per_span_mass_layer.sum(dim=0)  # [seq]
+    if norm_method == "per_token_mean":
+        total = sum(e - s for s, e in control_spans)
+        vec = vec / max(total, 1)
+    elif norm_method != "raw_mass":
+        raise ValueError(norm_method)
+    return vec[gen_start_idx:].tolist()
+
+
 # =============================================================================
 # CALIBRATION: map Layer 2 proxy -> Layer 1 rollout probability.
 # Isotonic (pool adjacent violators): monotone, no functional-form assumption,
@@ -596,7 +1051,10 @@ def apply_isotonic(fit, x_new):
 
 def make_calibration_id(domain, layer, anchor_policy, norm_method,
                         steering_condition, n_points):
-    payload = f"{domain}|{layer}|{anchor_policy}|{norm_method}|{steering_condition}|{n_points}|{HARNESS_VERSION}"
+    # CALIBRATION_VERSION, not HARNESS_VERSION: a change to the generation path cannot
+    # affect the attention proxy, and folding the harness version in here would
+    # invalidate every existing calibration for an unrelated bump.
+    payload = f"{domain}|{layer}|{anchor_policy}|{norm_method}|{steering_condition}|{n_points}|{CALIBRATION_VERSION}"
     return "cal_" + hashlib.sha256(payload.encode()).hexdigest()[:10]
 
 

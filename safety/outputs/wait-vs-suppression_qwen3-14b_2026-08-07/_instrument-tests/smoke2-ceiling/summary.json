@@ -1,0 +1,21 @@
+{
+  "n_rows": 2,
+  "n_committed": 2,
+  "n_never_committed": 0,
+  "n_warmup_hijack": 0,
+  "baseline_refusal_rate": 0.0,
+  "n_parent_complied": 2,
+  "seconds": 109.7,
+  "load_seconds": 8.9,
+  "parent_tokens_per_sec": 15.2,
+  "generations": 2,
+  "seconds_per_generation": 54.9,
+  "seconds_per_trace": 54.9,
+  "rollout_generations": 0,
+  "gpu": "NVIDIA A100-SXM4-40GB",
+  "scorer": "refusal_heuristic-0.1.0",
+  "gpu_seconds": 109.7,
+  "rate_by_budget": {
+    "1536": 0.0
+  }
+}

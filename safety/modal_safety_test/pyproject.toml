@@ -1,0 +1,14 @@
+[project]
+name = "safety-modal-eval"
+version = "0.1.0"
+description = "Modal.com launcher for the safety-side reasoning-model eval. The Modal client is the ONLY local dependency; all ML deps live in the remote image (see app.py)."
+requires-python = ">=3.10,<3.15"
+dependencies = [
+    # Pinned so `uv sync` reproduces the same client that built app.py.
+    # 1.5.x is the API surface app.py targets (Image.pip_install_from_requirements,
+    # add_local_file, add_local_dir, Volume.from_name, gpu="L40S").
+    "modal>=1.5,<2",
+]
+
+# Run everything from this directory:  uv sync  then  uv run modal run app.py
+# `uv sync` writes uv.lock here on first run, freezing the exact client version.

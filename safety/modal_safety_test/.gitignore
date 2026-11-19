@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+.venv/
+# keep uv.lock tracked (reproducibility); it is NOT ignored

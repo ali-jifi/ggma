@@ -1,0 +1,10 @@
+# Install torch separately with the right CUDA build for your box first (pick by
+# GPU arch: cu126 for 30xx/40xx, cu130 for 50xx Blackwell), e.g.:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu126
+# then: pip install -r requirements.txt
+torch>=2.1
+transformers>=4.45,<5   # 5.x makes apply_chat_template return a dict; frozen harness expects a tensor
+accelerate>=0.30        # device_map="auto"
+datasets>=2.19          # GSM8K loading
+numpy>=1.24
+matplotlib>=3.7         # analysis/plots.py only

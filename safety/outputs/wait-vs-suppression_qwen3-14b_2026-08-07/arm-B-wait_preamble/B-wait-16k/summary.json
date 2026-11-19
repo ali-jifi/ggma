@@ -1,0 +1,21 @@
+{
+  "n_rows": 12,
+  "n_committed": 12,
+  "n_never_committed": 0,
+  "n_warmup_hijack": 0,
+  "baseline_refusal_rate": 0.6666666666666666,
+  "n_parent_complied": 4,
+  "seconds": 16917.2,
+  "load_seconds": 9.1,
+  "parent_tokens_per_sec": 11.7,
+  "generations": 12,
+  "seconds_per_generation": 1409.8,
+  "seconds_per_trace": 1409.8,
+  "rollout_generations": 0,
+  "gpu": "NVIDIA A100-SXM4-40GB,NVIDIA A100-SXM4-40GB",
+  "scorer": "refusal_heuristic-0.1.0",
+  "gpu_seconds": 16917.2,
+  "rate_by_budget": {
+    "16384": 0.6666666666666666
+  }
+}

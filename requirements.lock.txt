@@ -1,0 +1,22 @@
+# Pinned environment for exact replication (validated on RTX 3090 Ti, Python 3.13).
+#
+# STEP 1 -- install torch SEPARATELY from the CUDA wheel index. It is NOT pinned
+# here on purpose: the freeze tag (e.g. torch==2.13.0+cu126) is machine-specific
+# and does not resolve from PyPI. Pick the build by GPU ARCH, not driver version:
+#     30xx/40xx (Ampere/Ada):   .../whl/cu126
+#     50xx (Blackwell, sm_120): .../whl/cu130   (cu128/cu129 have no torch 2.13.0)
+#     pip install "torch==2.13.0" --index-url https://download.pytorch.org/whl/cu126
+#   (CPU-only, torch-free tests only:  pip install torch)
+#
+# STEP 2 -- then:  pip install -r requirements.lock.txt
+#
+# transformers MUST stay 4.x: 5.x changed apply_chat_template to return a dict
+# and breaks the frozen harness. tokenizers is its companion; keep them together.
+transformers==4.57.6
+tokenizers==0.22.2
+accelerate==1.14.0
+datasets==5.0.0
+huggingface-hub==1.23.0
+safetensors==0.8.0
+numpy==2.5.1
+matplotlib==3.11.0

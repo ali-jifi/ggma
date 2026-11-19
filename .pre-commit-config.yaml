@@ -1,0 +1,10 @@
+# Local pre-commit hooks -- catch lint issues before they're pushed.
+# One-time setup per clone:  pip install pre-commit && pre-commit install
+# Then ruff runs automatically on `git commit`. Bump the rev with
+# `pre-commit autoupdate`. harness.py is excluded via ruff.toml (frozen file).
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.21
+    hooks:
+      - id: ruff
+        args: [--fix]
