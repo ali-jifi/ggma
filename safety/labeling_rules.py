@@ -26,6 +26,8 @@ Needs commitment/ on sys.path, not just the repo root (see the import below).
 
 # Same 0.75/0.25 that harness.compute_cell_stats pre-registers. Imported rather
 # than redeclared so the two can never drift apart.
+import re as _re
+
 from analysis.labeling import THR_HI, THR_LO
 
 DRIFT_RULES_VERSION = "safety-drift-rules-0.1"
@@ -96,7 +98,6 @@ def safety_drift_predicate(row, diag):
 # word-overlap heuristics, and the is_degradation call stays the human's. Swapping the two
 # booleans for a model judge later is a drop-in (same return shape).
 
-import re as _re
 
 # Instruction verbs, scaffolding, and high-frequency words that must NOT count as
 # "engaging the request" (they appear in the request phrasing AND in generic prose /

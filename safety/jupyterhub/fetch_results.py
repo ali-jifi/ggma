@@ -204,7 +204,7 @@ def cmd_list(args):
     print(f"runs under {args.remote_root} on the hub:")
     for r in runs:
         print(f"  {r}")
-    print(f"\n  ./run.sh fetch --run <name>    to pull one")
+    print("\n  ./run.sh fetch --run <name>    to pull one")
     print(f"  ./run.sh fetch --all          to pull all {len(runs)}")
 
 

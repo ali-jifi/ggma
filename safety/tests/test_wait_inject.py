@@ -117,6 +117,9 @@ def test_only_the_models_own_stop_ids_are_suppressed():
 
 # --- selection ----------------------------------------------------------------
 def test_wait_is_a_valid_forcing_method():
+    import pytest
+
+    pytest.importorskip("torch")  # harness imports torch; CI is torch-free
     import harness as H
     assert "wait" in H.VALID_FORCING
 

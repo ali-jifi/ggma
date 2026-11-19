@@ -36,7 +36,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import sys
 import time
@@ -227,7 +226,7 @@ class Hub:
 
     def run_code(self, code, *, timeout=600, stream=True):
         """Execute Python on the box. Returns (stdout_text, error_text)."""
-        import websocket                                          # noqa: PLC0415
+        import websocket  # noqa: PLC0415
 
         self.ensure_server()
         kid, xsrf = self._start_kernel()

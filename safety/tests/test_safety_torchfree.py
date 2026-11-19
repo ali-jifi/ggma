@@ -259,7 +259,6 @@ if __name__ == "__main__":
 
 # --- Bug 3: a HarmBench-judged set cannot produce a refusal rate ---------------
 
-from safety import judges as _judges  # noqa: E402
 from safety import metrics as _metrics  # noqa: E402
 
 _C = [{"category": "c", "prompt": "p", "response": "r"}] * 4

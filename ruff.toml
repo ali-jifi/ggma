@@ -10,7 +10,7 @@ extend-exclude = ["harness.py", "commitment/outputs", ".venv"]
 [lint]
 # F = real bugs (undefined names, unused imports); E/W = style; I = import order.
 select = ["E", "F", "W", "I"]
-ignore = ["E501"]  # long lines are fine in research code
+ignore = ["E501", "E702"]  # long lines + `a; b` plotting one-liners are fine in research code
 
 [lint.isort]
 # harness.py lives at repo root; the packages live under commitment/. Mark them
