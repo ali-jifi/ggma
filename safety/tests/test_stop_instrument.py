@@ -10,7 +10,9 @@ Run:  python3 -m pytest safety/tests/test_stop_instrument.py -q
 import sys
 from pathlib import Path
 
-import torch
+import pytest
+
+torch = pytest.importorskip("torch")  # CI is torch-free
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))

@@ -267,7 +267,6 @@ def run_clip_collect(model, tokenizer, meta, *, dataset, n=12, clips="25,100",
     import torch
 
     import harness as H
-
     from safety.collect_core import ensure_import_roots
     ensure_import_roots()
 

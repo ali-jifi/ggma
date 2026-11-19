@@ -30,7 +30,6 @@ Interpreting it, from the runs we have:
 
 from __future__ import annotations
 
-import re
 from typing import Iterable, Sequence
 
 DEFAULT_N = 12                        # the width clip_core.py's measurement used

@@ -27,12 +27,13 @@ import sys
 from pathlib import Path
 
 import matplotlib
+
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt                                       # noqa: E402
-from matplotlib.backends.backend_pdf import PdfPages                  # noqa: E402
+import matplotlib.pyplot as plt  # noqa: E402
+from matplotlib.backends.backend_pdf import PdfPages  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import shingle                                                        # noqa: E402
+import shingle  # noqa: E402
 
 INK = "#1a1a2e"; MUTE = "#6b7280"; GRID = "#e5e7eb"
 BLUE = "#2563eb"; RED = "#dc2626"; GREEN = "#059669"; AMBER = "#d97706"
@@ -55,7 +56,7 @@ def load_run(d: Path) -> list:
         rows = json.loads(rp.read_text())
         partial = False
     elif pp.exists():
-        rows = [json.loads(l) for l in pp.read_text().splitlines() if l.strip()]
+        rows = [json.loads(ln) for ln in pp.read_text().splitlines() if ln.strip()]
         partial = True
     else:
         return []
@@ -382,7 +383,7 @@ def page_main_figure(pdf, rows, cell):
                     xs.append(i); ys.append(c["asr"]); los.append(lo); his.append(hi)
             if xs:
                 ax.errorbar(xs, ys,
-                            yerr=[[y - l for y, l in zip(ys, los)],
+                            yerr=[[y - lo for y, lo in zip(ys, los)],
                                   [h - y for y, h in zip(ys, his)]],
                             marker=mark, color=colour, lw=2, ms=7, capsize=4,
                             elinewidth=1.2, label=forcing)
